@@ -42,6 +42,8 @@ NS_ASSUME_NONNULL_BEGIN
  */
 @property (nonatomic, readonly) id mgl_jsonExpressionObject;
 
+- (instancetype)mgl_appendingObject:(id)object;
+
 @end
 
 NS_ASSUME_NONNULL_END

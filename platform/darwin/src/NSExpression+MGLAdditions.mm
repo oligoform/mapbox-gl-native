@@ -487,6 +487,11 @@ NSArray *MGLSubexpressionsWithJSONObjects(NSArray *objects) {
     return nil;
 }
 
+- (instancetype)mgl_appendingObject:(id)object {
+    
+    return [NSExpression expressionWithFormat:@"FUNCTION(%@, 'stringByAppendingString:', %@)", self, object];
+}
+
 - (id)mgl_jsonExpressionObject {
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
