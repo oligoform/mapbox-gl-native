@@ -145,6 +145,12 @@ OfflineDatabase::Statement OfflineDatabase::getStatement(const char * sql) {
     return Statement(*statements.emplace(sql, std::make_unique<mapbox::sqlite::Statement>(db->prepare(sql))).first->second);
 }
 
+void OfflineDatabase::batch(BatchedFn&& fn) {
+    mapbox::sqlite::Transaction transaction(*db);
+    fn();
+    transaction.commit();
+}
+
 optional<Response> OfflineDatabase::get(const Resource& resource) {
     auto result = getInternal(resource);
     return result ? result->first : optional<Response>();
