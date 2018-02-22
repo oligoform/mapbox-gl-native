@@ -534,6 +534,7 @@ typedef NS_ENUM(NSInteger, MBXSettingsMiscellaneousRows) {
                     break;
                 case MBXSettingsRuntimeStylingAddLimeGreenTriangleLayer:
                     [self styleAddLimeGreenTriangleLayer];
+                    break;
                 case MBXSettingsRuntimeStylingDDSPolygon:
                     [self stylePolygonWithDDS];
                     break;
