@@ -107,8 +107,9 @@ test('Map', function(t) {
             'loaded',
             'render',
             'release',
-            'addClass',
+            'cancel',
             'addSource',
+            'removeSource',
             'addLayer',
             'removeLayer',
             'addImage',
@@ -120,6 +121,10 @@ test('Map', function(t) {
             'setZoom',
             'setBearing',
             'setPitch',
+            'setLight',
+            'setAxonometric',
+            'setXSkew',
+            'setYSkew',
             'dumpDebugLogs',
             'queryRenderedFeatures'
         ]);
@@ -311,11 +316,11 @@ test('Map', function(t) {
 
             t.throws(function() {
                 map.load('foo bar');
-            }, /Requires a map style to be a valid style JSON/);
+            }, /Failed to parse style: 1 - Invalid value./);
 
             t.throws(function() {
                 map.load('""');
-            }, /Requires a map style to be a valid style JSON/);
+            }, /Failed to parse style: style must be an object/);
 
             map.release();
             t.end();
@@ -335,7 +340,7 @@ test('Map', function(t) {
 
             t.throws(function() {
                 map.load('invalid');
-            }, /Requires a map style to be a valid style JSON/);
+            }, /Failed to parse style: 0 - Invalid value./);
         });
 
         t.test('accepts an empty stylesheet string', function(t) {

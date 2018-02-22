@@ -6,6 +6,7 @@
 #import "NSException+MGLAdditions.h"
 #import "MGLAPIClient.h"
 #import "MGLLocationManager.h"
+#import "MGLTelemetryConfig.h"
 
 #include <mbgl/storage/reachability.h>
 #include <sys/sysctl.h>
@@ -54,6 +55,9 @@ static NSString *const MGLEventKeySessionId = @"sessionId";
 static NSString *const MGLEventKeyApplicationState = @"applicationState";
 static NSString *const MGLEventKeyAltitude = @"altitude";
 
+static NSString *const MGLMapboxAccountType = @"MGLMapboxAccountType";
+static NSString *const MGLMapboxMetricsEnabled = @"MGLMapboxMetricsEnabled";
+
 // SDK event source
 static NSString *const MGLEventSource = @"mapbox";
 
@@ -94,12 +98,12 @@ const NSTimeInterval MGLFlushInterval = 180;
 - (NSString *)sysInfoByName:(char *)typeSpecifier {
     size_t size;
     sysctlbyname(typeSpecifier, NULL, &size, NULL, 0);
-    
+
     char *answer = malloc(size);
     sysctlbyname(typeSpecifier, answer, &size, NULL, 0);
-    
+
     NSString *results = [NSString stringWithCString:answer encoding: NSUTF8StringEncoding];
-    
+
     free(answer);
     return results;
 }
@@ -124,6 +128,8 @@ const NSTimeInterval MGLFlushInterval = 180;
 @property (nonatomic) NSTimer *timer;
 @property (nonatomic) NSDate *instanceIDRotationDate;
 @property (nonatomic) NSDate *nextTurnstileSendDate;
+@property (nonatomic) NSNumber *currentAccountTypeValue;
+@property (nonatomic) BOOL currentMetricsEnabledValue;
 
 @end
 
@@ -135,10 +141,10 @@ const NSTimeInterval MGLFlushInterval = 180;
 + (void)initialize {
     if (self == [MGLMapboxEvents class]) {
         NSBundle *bundle = [NSBundle mainBundle];
-        NSNumber *accountTypeNumber = [bundle objectForInfoDictionaryKey:@"MGLMapboxAccountType"];
+        NSNumber *accountTypeNumber = [bundle objectForInfoDictionaryKey:MGLMapboxAccountType];
         [[NSUserDefaults standardUserDefaults] registerDefaults:@{
-             @"MGLMapboxAccountType": accountTypeNumber ?: @0,
-             @"MGLMapboxMetricsEnabled": @YES,
+             MGLMapboxAccountType: accountTypeNumber ?: @0,
+             MGLMapboxMetricsEnabled: @YES,
              @"MGLMapboxMetricsDebugLoggingEnabled": @NO,
          }];
     }
@@ -152,8 +158,8 @@ const NSTimeInterval MGLFlushInterval = 180;
     if ([NSProcessInfo instancesRespondToSelector:@selector(isLowPowerModeEnabled)]) {
         isLowPowerModeEnabled = [[NSProcessInfo processInfo] isLowPowerModeEnabled];
     }
-    return ([[NSUserDefaults standardUserDefaults] boolForKey:@"MGLMapboxMetricsEnabled"] &&
-            [[NSUserDefaults standardUserDefaults] integerForKey:@"MGLMapboxAccountType"] == 0 &&
+    return ([[NSUserDefaults standardUserDefaults] boolForKey:MGLMapboxMetricsEnabled] &&
+            [[NSUserDefaults standardUserDefaults] integerForKey:MGLMapboxAccountType] == 0 &&
             !isLowPowerModeEnabled);
 #endif
 }
@@ -167,6 +173,11 @@ const NSTimeInterval MGLFlushInterval = 180;
 - (instancetype) init {
     self = [super init];
     if (self) {
+        [MGLTelemetryConfig.sharedConfig configurationFromKey:[[NSUserDefaults standardUserDefaults] objectForKey:MGLMapboxMetricsProfile]];
+        
+        _currentAccountTypeValue = @0;
+        _currentMetricsEnabledValue = YES;
+        
         _appBundleId = [[NSBundle mainBundle] bundleIdentifier];
         _apiClient = [[MGLAPIClient alloc] init];
 
@@ -180,11 +191,11 @@ const NSTimeInterval MGLFlushInterval = 180;
 
         // Events Control
         _eventQueue = [[NSMutableArray alloc] init];
-        
+
         // Setup Date Format
         _rfc3339DateFormatter = [[NSDateFormatter alloc] init];
         NSLocale *enUSPOSIXLocale = [[NSLocale alloc] initWithLocaleIdentifier:@"en_US_POSIX"];
-        
+
         [_rfc3339DateFormatter setLocale:enUSPOSIXLocale];
         [_rfc3339DateFormatter setDateFormat:@"yyyy'-'MM'-'dd'T'HH':'mm':'ssZ"];
         // Clear Any System TimeZone Cache
@@ -201,10 +212,10 @@ const NSTimeInterval MGLFlushInterval = 180;
         } else {
             self.canEnableDebugLogging = YES;
         }
-        
+
         // Watch for changes to telemetry settings by the user
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(userDefaultsDidChange:) name:NSUserDefaultsDidChangeNotification object:nil];
-       
+
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(pauseOrResumeMetricsCollectionIfRequired) name:UIApplicationDidEnterBackgroundNotification object:nil];
         [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(pauseOrResumeMetricsCollectionIfRequired) name:UIApplicationDidBecomeActiveNotification object:nil];
 
@@ -249,50 +260,74 @@ const NSTimeInterval MGLFlushInterval = 180;
 }
 
 - (void)userDefaultsDidChange:(NSNotification *)notification {
-    dispatch_async(dispatch_get_main_queue(), ^{
-        [self pauseOrResumeMetricsCollectionIfRequired];
-    });
+    
+    // Guard against over calling pause / resume if the values this implementation actually
+    // cares about have not changed
+    
+    if ([[notification object] respondsToSelector:@selector(objectForKey:)]) {
+        NSUserDefaults *userDefaults = [notification object];
+        
+        NSNumber *accountType = [userDefaults objectForKey:MGLMapboxAccountType];
+        BOOL metricsEnabled = [[userDefaults objectForKey:MGLMapboxMetricsEnabled] boolValue];
+        
+        if (![accountType isEqualToNumber:self.currentAccountTypeValue] || metricsEnabled != self.currentMetricsEnabledValue) {
+            [self pauseOrResumeMetricsCollectionIfRequired];
+            self.currentAccountTypeValue = accountType;
+            self.currentMetricsEnabledValue = metricsEnabled;
+        }        
+    }
+    
 }
 
 - (void)pauseOrResumeMetricsCollectionIfRequired {
-    UIApplication *application = [UIApplication sharedApplication];
     
-    // Prevent blue status bar when host app has `when in use` permission only and it is not in foreground
-    if ([CLLocationManager authorizationStatus] == kCLAuthorizationStatusAuthorizedWhenInUse &&
-        application.applicationState == UIApplicationStateBackground) {
+    // [CLLocationManager authorizationStatus] has been found to block in some cases so
+    // dispatch the call to a non-UI thread
+    dispatch_async(self.serialQueue, ^{
+        CLAuthorizationStatus status = [CLLocationManager authorizationStatus];
         
-        if (_backgroundTaskIdentifier == UIBackgroundTaskInvalid) {
-            _backgroundTaskIdentifier = [application beginBackgroundTaskWithExpirationHandler:^{
-                [application endBackgroundTask:_backgroundTaskIdentifier];
-                _backgroundTaskIdentifier = UIBackgroundTaskInvalid;
-            }];
-            [self flush];
-        }
-        
-        [self pauseMetricsCollection];
-        return;
-    }
-    
-    // Toggle pause based on current pause state, user opt-out state, and low-power state.
-    BOOL enabled = [[self class] isEnabled];
-    if (self.paused && enabled) {
-        [self resumeMetricsCollection];
-    } else if (!self.paused && !enabled) {
-        [self pauseMetricsCollection];
-    }
+        // Checking application state must be done on the main thread for safety and
+        // to avoid a thread sanitizer error
+        dispatch_async(dispatch_get_main_queue(), ^{
+            UIApplication *application = [UIApplication sharedApplication];
+            UIApplicationState state = application.applicationState;
+            
+            // Prevent blue status bar when host app has `when in use` permission only and it is not in foreground
+            if (status == kCLAuthorizationStatusAuthorizedWhenInUse && state == UIApplicationStateBackground) {
+                if (_backgroundTaskIdentifier == UIBackgroundTaskInvalid) {
+                    _backgroundTaskIdentifier = [application beginBackgroundTaskWithExpirationHandler:^{
+                        [application endBackgroundTask:_backgroundTaskIdentifier];
+                        _backgroundTaskIdentifier = UIBackgroundTaskInvalid;
+                    }];
+                    [self flush];
+                }
+                [self pauseMetricsCollection];
+                return;
+            }
+            
+            // Toggle pause based on current pause state, user opt-out state, and low-power state.
+            BOOL enabled = [[self class] isEnabled];
+            if (self.paused && enabled) {
+                [self resumeMetricsCollection];
+            } else if (!self.paused && !enabled) {
+                [self flush];
+                [self pauseMetricsCollection];
+            }
+        });
+    });
 }
 
 - (void)pauseMetricsCollection {
     if (self.paused) {
         return;
     }
-    
+
     self.paused = YES;
     [self.timer invalidate];
     self.timer = nil;
     [self.eventQueue removeAllObjects];
     self.data = nil;
-    
+
     [self.locationManager stopUpdatingLocation];
 }
 
@@ -303,7 +338,7 @@ const NSTimeInterval MGLFlushInterval = 180;
 
     self.paused = NO;
     self.data = [[MGLMapboxEventsData alloc] init];
-    
+
     [self.locationManager startUpdatingLocation];
 }
 
@@ -315,24 +350,17 @@ const NSTimeInterval MGLFlushInterval = 180;
     if ([MGLAccountManager accessToken] == nil) {
         return;
     }
-    
-    if ([self.eventQueue count] <= 1) {
-        [self.eventQueue removeAllObjects];
-        [[UIApplication sharedApplication] endBackgroundTask:_backgroundTaskIdentifier];
-        _backgroundTaskIdentifier = UIBackgroundTaskInvalid;
-        return;
-    }
-    
+
     NSArray *events = [NSArray arrayWithArray:self.eventQueue];
     [self.eventQueue removeAllObjects];
-    
+
     [self postEvents:events];
-    
+
     if (self.timer) {
         [self.timer invalidate];
         self.timer = nil;
     }
-    
+
     [self pushDebugEvent:MGLEventTypeLocalDebug withAttributes:@{MGLEventKeyLocalDebugDescription:@"flush"}];
 }
 
@@ -340,21 +368,21 @@ const NSTimeInterval MGLFlushInterval = 180;
     if (self.nextTurnstileSendDate && [[NSDate date] timeIntervalSinceDate:self.nextTurnstileSendDate] < 0) {
         return;
     }
-    
+
     NSString *vendorID = [[[UIDevice currentDevice] identifierForVendor] UUIDString];
     if (!vendorID) {
         return;
     }
-    
+
     NSDictionary *turnstileEventAttributes = @{MGLEventKeyEvent: MGLEventTypeAppUserTurnstile,
                                                MGLEventKeyCreated: [self.rfc3339DateFormatter stringFromDate:[NSDate date]],
                                                MGLEventKeyVendorID: vendorID,
                                                MGLEventKeyEnabledTelemetry: @([[self class] isEnabled])};
-    
+
     if ([MGLAccountManager accessToken] == nil) {
         return;
     }
-    
+
     __weak __typeof__(self) weakSelf = self;
     [self.apiClient postEvent:turnstileEventAttributes completionHandler:^(NSError * _Nullable error) {
         __strong __typeof__(weakSelf) strongSelf = weakSelf;
@@ -374,7 +402,7 @@ const NSTimeInterval MGLFlushInterval = 180;
     NSDateComponents *dayComponent = [[NSDateComponents alloc] init];
     dayComponent.day = 1;
     NSDate *sometimeTomorrow = [calendar dateByAddingComponents:dayComponent toDate:[NSDate date] options:0];
-   
+
     // Find the start of tomorrow and use that as the next turnstile send date. The effect of this is that
     // turnstile events can be sent as much as once per calendar day and always at the start of a session
     // when a map load happens.
@@ -391,15 +419,15 @@ const NSTimeInterval MGLFlushInterval = 180;
     if (!event) {
         return;
     }
-    
+
     if ([event isEqualToString:MGLEventTypeMapLoad]) {
         [self pushTurnstileEvent];
     }
-    
+
     if (self.paused) {
         return;
     }
-    
+
     MGLMapboxEventAttributes *fullyFormedEvent = [self fullyFormedEventForEvent:event withAttributes:attributeDictionary];
     if (fullyFormedEvent) {
         [self.eventQueue addObject:fullyFormedEvent];
@@ -434,25 +462,31 @@ const NSTimeInterval MGLFlushInterval = 180;
 }
 
 - (MGLMapboxEventAttributes *)locationEventWithAttributes:(MGLMapboxEventAttributes *)attributeDictionary {
-    MGLMutableMapboxEventAttributes *attributes = [@{MGLEventKeyEvent: MGLEventTypeLocation,
-                                                     MGLEventKeySource: MGLEventSource,
-                                                     MGLEventKeySessionId: self.instanceID,
-                                                     MGLEventKeyOperatingSystem: self.data.iOSVersion} mutableCopy];
-    [self addApplicationStateToAttributes:attributes];
+    MGLMutableMapboxEventAttributes *attributes = [NSMutableDictionary dictionary];
+    attributes[MGLEventKeyEvent] = MGLEventTypeLocation;
+    attributes[MGLEventKeySource] = MGLEventSource;
+    attributes[MGLEventKeySessionId] = self.instanceID;
+    attributes[MGLEventKeyOperatingSystem] = self.data.iOSVersion;
+    NSString *currentApplicationState = [self applicationState];
+    if (![currentApplicationState isEqualToString:MGLApplicationStateUnknown]) {
+        attributes[MGLEventKeyApplicationState] = currentApplicationState;
+    }
+
     return [self eventForAttributes:attributes attributeDictionary:attributeDictionary];
 }
 
 - (MGLMapboxEventAttributes *)mapLoadEventWithAttributes:(MGLMapboxEventAttributes *)attributeDictionary {
-    MGLMutableMapboxEventAttributes *attributes = [@{MGLEventKeyEvent: MGLEventTypeMapLoad,
-                                                     MGLEventKeyCreated: [self.rfc3339DateFormatter stringFromDate:[NSDate date]],
-                                                     MGLEventKeyVendorID: self.data.vendorId,
-                                                     MGLEventKeyModel: self.data.model,
-                                                     MGLEventKeyOperatingSystem: self.data.iOSVersion,
-                                                     MGLEventKeyResolution: @(self.data.scale),
-                                                     MGLEventKeyAccessibilityFontScale: @([self contentSizeScale]),
-                                                     MGLEventKeyOrientation: [self deviceOrientation],
-                                                     MGLEventKeyWifi: @([[MGLReachability reachabilityForLocalWiFi] isReachableViaWiFi])} mutableCopy];
-    [self addBatteryStateToAttributes:attributes];
+    MGLMutableMapboxEventAttributes *attributes = [NSMutableDictionary dictionary];
+    attributes[MGLEventKeyEvent] = MGLEventTypeMapLoad;
+    attributes[MGLEventKeyCreated] = [self.rfc3339DateFormatter stringFromDate:[NSDate date]];
+    attributes[MGLEventKeyVendorID] = self.data.vendorId;
+    attributes[MGLEventKeyModel] = self.data.model;
+    attributes[MGLEventKeyOperatingSystem] = self.data.iOSVersion;
+    attributes[MGLEventKeyResolution] = @(self.data.scale);
+    attributes[MGLEventKeyAccessibilityFontScale] = @([self contentSizeScale]);
+    attributes[MGLEventKeyOrientation] = [self deviceOrientation];
+    attributes[MGLEventKeyWifi] = @([[MGLReachability reachabilityForLocalWiFi] isReachableViaWiFi]);
+
     return [self eventForAttributes:attributes attributeDictionary:attributeDictionary];
 }
 
@@ -465,19 +499,22 @@ const NSTimeInterval MGLFlushInterval = 180;
 - (MGLMapboxEventAttributes *)mapDragEndEventWithAttributes:(MGLMapboxEventAttributes *)attributeDictionary {
     MGLMutableMapboxEventAttributes *attributes = [self interactionEvent];
     attributes[MGLEventKeyEvent] = MGLEventTypeMapDragEnd;
+
     return [self eventForAttributes:attributes attributeDictionary:attributeDictionary];
 }
 
 - (MGLMutableMapboxEventAttributes *)interactionEvent {
-    MGLMutableMapboxEventAttributes *attributes = [@{MGLEventKeyCreated: [self.rfc3339DateFormatter stringFromDate:[NSDate date]],
-                                                     MGLEventKeyOrientation: [self deviceOrientation],
-                                                     MGLEventKeyWifi: @([[MGLReachability reachabilityForLocalWiFi] isReachableViaWiFi])} mutableCopy];
-    [self addBatteryStateToAttributes:attributes];
+    MGLMutableMapboxEventAttributes *attributes = [NSMutableDictionary dictionary];
+    attributes[MGLEventKeyCreated] = [self.rfc3339DateFormatter stringFromDate:[NSDate date]];
+    attributes[MGLEventKeyOrientation] = [self deviceOrientation];
+    attributes[MGLEventKeyWifi] = @([[MGLReachability reachabilityForLocalWiFi] isReachableViaWiFi]);
+
     return attributes;
 }
 
 - (MGLMapboxEventAttributes *)eventForAttributes:(MGLMutableMapboxEventAttributes *)attributes attributeDictionary:(MGLMapboxEventAttributes *)attributeDictionary {
     [attributes addEntriesFromDictionary:attributeDictionary];
+
     return [attributes copy];
 }
 
@@ -487,7 +524,7 @@ const NSTimeInterval MGLFlushInterval = 180;
     if (self.paused) {
         return;
     }
-    
+
     __weak __typeof__(self) weakSelf = self;
     dispatch_async(self.serialQueue, ^{
         __strong __typeof__(weakSelf) strongSelf = weakSelf;
@@ -543,7 +580,7 @@ const NSTimeInterval MGLFlushInterval = 180;
             result = @"Default - Unknown";
             break;
     }
-    
+
     return result;
 }
 
@@ -562,9 +599,9 @@ const NSTimeInterval MGLFlushInterval = 180;
 
 - (NSInteger)contentSizeScale {
     NSInteger result = -9999;
-    
+
     NSString *sc = [UIApplication sharedApplication].preferredContentSizeCategory;
-    
+
     if ([sc isEqualToString:UIContentSizeCategoryExtraSmall]) {
         result = -3;
     } else if ([sc isEqualToString:UIContentSizeCategorySmall]) {
@@ -590,31 +627,8 @@ const NSTimeInterval MGLFlushInterval = 180;
     } else if ([sc isEqualToString:UIContentSizeCategoryAccessibilityExtraExtraExtraLarge]) {
         result = 13;
     }
-    
+
     return result;
-}
-
-- (void)addBatteryStateToAttributes:(MGLMutableMapboxEventAttributes *)attributes {
-    UIDeviceBatteryState batteryState = [[UIDevice currentDevice] batteryState];
-    switch (batteryState) {
-        case UIDeviceBatteryStateCharging:
-        case UIDeviceBatteryStateFull:
-            attributes[MGLEventKeyPluggedIn] = @(YES);
-            break;
-        case UIDeviceBatteryStateUnplugged:
-            attributes[MGLEventKeyPluggedIn] = @(NO);
-            break;
-        default:
-            // do nothing
-            break;
-    }
-}
-
-- (void)addApplicationStateToAttributes:(MGLMutableMapboxEventAttributes *)attributes {
-    NSString *currentApplicationState = [self applicationState];
-    if (![currentApplicationState isEqualToString:MGLApplicationStateUnknown]) {
-        attributes[MGLEventKeyApplicationState] = currentApplicationState;
-    }
 }
 
 + (void)ensureMetricsOptoutExists {
@@ -622,7 +636,7 @@ const NSTimeInterval MGLFlushInterval = 180;
     BOOL metricsEnabledSettingShownInAppFlag = [shownInAppNumber boolValue];
 
     if (!metricsEnabledSettingShownInAppFlag &&
-        [[NSUserDefaults standardUserDefaults] integerForKey:@"MGLMapboxAccountType"] == 0) {
+        [[NSUserDefaults standardUserDefaults] integerForKey:MGLMapboxAccountType] == 0) {
         // Opt-out is not configured in UI, so check for Settings.bundle
         id defaultEnabledValue;
         NSString *appSettingsBundle = [[NSBundle mainBundle] pathForResource:@"Settings" ofType:@"bundle"];
@@ -632,7 +646,7 @@ const NSTimeInterval MGLFlushInterval = 180;
             NSDictionary *settings = [NSDictionary dictionaryWithContentsOfFile:[appSettingsBundle stringByAppendingPathComponent:@"Root.plist"]];
             NSArray *preferences = settings[@"PreferenceSpecifiers"];
             for (NSDictionary *prefSpecification in preferences) {
-                if ([prefSpecification[@"Key"] isEqualToString:@"MGLMapboxMetricsEnabled"]) {
+                if ([prefSpecification[@"Key"] isEqualToString:MGLMapboxMetricsEnabled]) {
                     defaultEnabledValue = prefSpecification[@"DefaultValue"];
                 }
             }
@@ -688,18 +702,18 @@ const NSTimeInterval MGLFlushInterval = 180;
     if (![self debugLoggingEnabled]) {
         return;
     }
-    
+
     if (!event) {
         return;
     }
-    
+
     MGLMutableMapboxEventAttributes *evt = [MGLMutableMapboxEventAttributes dictionaryWithDictionary:attributeDictionary];
     [evt setObject:event forKey:@"event"];
     [evt setObject:[self.rfc3339DateFormatter stringFromDate:[NSDate date]] forKey:@"created"];
     [evt setValue:[self applicationState] forKey:@"applicationState"];
     [evt setValue:@([[self class] isEnabled]) forKey:@"telemetryEnabled"];
     [evt setObject:self.instanceID forKey:@"instance"];
-    
+
     MGLMapboxEventAttributes *finalEvent = [NSDictionary dictionaryWithDictionary:evt];
     [self writeEventToLocalDebugLog:finalEvent];
 }
@@ -726,12 +740,12 @@ const NSTimeInterval MGLFlushInterval = 180;
     dispatch_async(self.debugLogSerialQueue, ^{
         if ([NSJSONSerialization isValidJSONObject:event]) {
             NSData *jsonData = [NSJSONSerialization dataWithJSONObject:event options:NSJSONWritingPrettyPrinted error:nil];
-            
+
             NSString *jsonString = [[NSString alloc] initWithData:jsonData encoding:NSUTF8StringEncoding];
             jsonString = [jsonString stringByAppendingString:@",\n"];
-            
+
             NSString *logFilePath = [[NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) firstObject] stringByAppendingPathComponent:[NSString stringWithFormat:@"telemetry_log-%@.json", self.dateForDebugLogFile]];
-            
+
             NSFileManager *fileManager = [[NSFileManager alloc] init];
             if ([fileManager fileExistsAtPath:logFilePath]) {
                 NSFileHandle *fileHandle = [NSFileHandle fileHandleForWritingAtPath:logFilePath];
@@ -793,7 +807,7 @@ const NSTimeInterval MGLFlushInterval = 180;
     if (mobileProvision[@"ProvisionedDevices"] && [mobileProvision[@"ProvisionedDevices"] count]) {
         return NO; // development or ad-hoc
     }
-    
+
     return YES; // expected development/enterprise/ad-hoc entitlements not found
 #endif
 }

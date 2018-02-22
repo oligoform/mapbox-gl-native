@@ -1,5 +1,6 @@
 package com.mapbox.mapboxsdk.net;
 
+import android.annotation.SuppressLint;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -7,6 +8,7 @@ import android.content.IntentFilter;
 import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.support.annotation.NonNull;
+import android.support.annotation.UiThread;
 
 import com.mapbox.mapboxsdk.Mapbox;
 
@@ -20,18 +22,20 @@ import timber.log.Timber;
  * Not public api.
  */
 public class ConnectivityReceiver extends BroadcastReceiver {
+  @SuppressLint("StaticFieldLeak")
   private static ConnectivityReceiver INSTANCE;
 
   /**
-   * Get or create the singleton instance
+   * Get a single instance of ConnectivityReceiver.
+   *
+   * @param context the context to extract the application context from
+   * @return single instance of ConnectivityReceiver
    */
   public static synchronized ConnectivityReceiver instance(Context context) {
     if (INSTANCE == null) {
-      //Register new instance
-      INSTANCE = new ConnectivityReceiver();
-      context.registerReceiver(INSTANCE, new IntentFilter("android.net.conn.CONNECTIVITY_CHANGE"));
-
-      //Add default listeners
+      // Register new instance
+      INSTANCE = new ConnectivityReceiver(context.getApplicationContext());
+      // Add default listeners
       INSTANCE.addListener(new NativeConnectivityListener());
     }
 
@@ -39,19 +43,50 @@ public class ConnectivityReceiver extends BroadcastReceiver {
   }
 
   private List<ConnectivityListener> listeners = new CopyOnWriteArrayList<>();
+  private Context context;
+  private int activationCounter;
 
-  private ConnectivityReceiver() {
+  private ConnectivityReceiver(@NonNull Context context) {
+    this.context = context;
   }
 
   /**
-   * @see BroadcastReceiver#onReceive(Context, Intent)
+   * Activates the connectivity receiver.
+   * <p>
+   * if the underlying connectivity receiver isn't active, register the connectivity receiver.
+   * </p>
+   */
+  @UiThread
+  public void activate() {
+    if (activationCounter == 0) {
+      context.registerReceiver(INSTANCE, new IntentFilter("android.net.conn.CONNECTIVITY_CHANGE"));
+    }
+    activationCounter++;
+  }
+
+  /**
+   * Deactivates the connectivity receiver.
+   * <p>
+   * if no other components are listening, unregister the underlying connectivity receiver.
+   * </p>
+   */
+  @UiThread
+  public void deactivate() {
+    activationCounter--;
+    if (activationCounter == 0) {
+      context.unregisterReceiver(INSTANCE);
+    }
+  }
+
+  /**
+   * {@inheritDoc}
    */
   @Override
   public void onReceive(Context context, Intent intent) {
     boolean connected = isConnected(context);
-    Timber.v("Connected: " + connected);
+    Timber.v("Connected: %s", connected);
 
-    //Loop over listeners
+    // Loop over listeners
     for (ConnectivityListener listener : listeners) {
       listener.onNetworkStateChanged(connected);
     }
@@ -92,5 +127,4 @@ public class ConnectivityReceiver extends BroadcastReceiver {
     NetworkInfo activeNetwork = cm.getActiveNetworkInfo();
     return (activeNetwork != null && activeNetwork.isConnected());
   }
-
 }

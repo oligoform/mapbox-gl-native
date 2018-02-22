@@ -1,24 +1,26 @@
 package com.mapbox.mapboxsdk.testapp.activity.maplayout;
 
 import android.os.Bundle;
-import android.support.annotation.NonNull;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.view.Menu;
 import android.view.MenuItem;
 
 import com.mapbox.mapboxsdk.annotations.MarkerOptions;
 import com.mapbox.mapboxsdk.camera.CameraPosition;
+import com.mapbox.mapboxsdk.camera.CameraUpdateFactory;
 import com.mapbox.mapboxsdk.constants.MyLocationTracking;
 import com.mapbox.mapboxsdk.geometry.LatLng;
-import com.mapbox.mapboxsdk.camera.CameraUpdateFactory;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.maps.TrackingSettings;
 import com.mapbox.mapboxsdk.testapp.R;
 
+/**
+ * Test activity showcasing using the map padding API.
+ * <p>
+ * This activity tests for correct padding around a marker (Bangalore) and correct padding around MyLocationView.
+ * </p>
+ */
 public class MapPaddingActivity extends AppCompatActivity {
 
   private MapView mapView;
@@ -29,31 +31,20 @@ public class MapPaddingActivity extends AppCompatActivity {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_map_padding);
 
-    final Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
-    }
-
     mapView = (MapView) findViewById(R.id.mapView);
     mapView.setTag(true);
     mapView.onCreate(savedInstanceState);
 
-    mapView.getMapAsync(new OnMapReadyCallback() {
-      @Override
-      public void onMapReady(@NonNull MapboxMap mapboxMap) {
-        MapPaddingActivity.this.mapboxMap = mapboxMap;
+    mapView.getMapAsync(mapboxMap -> {
+      MapPaddingActivity.this.mapboxMap = mapboxMap;
 
-        int paddingLeft = (int) getResources().getDimension(R.dimen.map_padding_left);
-        int paddingBottom = (int) getResources().getDimension(R.dimen.map_padding_bottom);
-        int paddingRight = (int) getResources().getDimension(R.dimen.map_padding_right);
-        mapboxMap.setPadding(paddingLeft, toolbar.getHeight(), paddingRight, paddingBottom);
+      int paddingLeft = (int) getResources().getDimension(R.dimen.map_padding_left);
+      int paddingBottom = (int) getResources().getDimension(R.dimen.map_padding_bottom);
+      int paddingRight = (int) getResources().getDimension(R.dimen.map_padding_right);
+      int paddingTop = (int) getResources().getDimension(R.dimen.map_padding_top);
+      mapboxMap.setPadding(paddingLeft, paddingTop, paddingRight, paddingBottom);
 
-        moveToBangalore();
-      }
+      moveToBangalore();
     });
   }
 
@@ -138,10 +129,6 @@ public class MapPaddingActivity extends AppCompatActivity {
   @Override
   public boolean onOptionsItemSelected(MenuItem item) {
     switch (item.getItemId()) {
-      case android.R.id.home:
-        onBackPressed();
-        return true;
-
       case R.id.action_user_tracking:
         if (mapboxMap != null) {
           toggleGps(true);

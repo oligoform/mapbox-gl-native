@@ -2,6 +2,7 @@
 #include <mbgl/util/constants.hpp>
 #include <mbgl/util/logging.hpp>
 #include <mbgl/util/url.hpp>
+#include <mbgl/util/tileset.hpp>
 
 #include <stdexcept>
 #include <vector>
@@ -56,7 +57,7 @@ std::string normalizeStyleURL(const std::string& baseURL,
         return str;
     }
 
-    const auto tpl = baseURL + "/styles/v1/{path}?access_token=" + accessToken;
+    const auto tpl = baseURL + "/styles/v1{path}?access_token=" + accessToken;
     return transformURL(tpl, str, url);
 }
 
@@ -74,7 +75,7 @@ std::string normalizeSpriteURL(const std::string& baseURL,
     }
 
     const auto tpl =
-        baseURL + "/styles/v1/{directory}{filename}/sprite{extension}?access_token=" + accessToken;
+        baseURL + "/styles/v1{directory}{filename}/sprite{extension}?access_token=" + accessToken;
     return transformURL(tpl, str, url);
 }
 
@@ -91,7 +92,7 @@ std::string normalizeGlyphsURL(const std::string& baseURL,
         return str;
     }
 
-    const auto tpl = baseURL + "/fonts/v1/{path}?access_token=" + accessToken;
+    const auto tpl = baseURL + "/fonts/v1{path}?access_token=" + accessToken;
     return transformURL(tpl, str, url);
 }
 
@@ -108,13 +109,13 @@ std::string normalizeTileURL(const std::string& baseURL,
         return str;
     }
 
-    const auto tpl = baseURL + "/v4/{path}?access_token=" + accessToken;
+    const auto tpl = baseURL + "/v4{path}?access_token=" + accessToken;
     return transformURL(tpl, str, url);
 }
 
 std::string
-canonicalizeTileURL(const std::string& str, const SourceType type, const uint16_t tileSize) {
-    const char* version = "v4/";
+canonicalizeTileURL(const std::string& str, const style::SourceType type, const uint16_t tileSize) {
+    const char* version = "/v4/";
     const size_t versionLen = strlen(version);
 
     const URL url(str);
@@ -132,7 +133,7 @@ canonicalizeTileURL(const std::string& str, const SourceType type, const uint16_
     std::string result = "mapbox://tiles/";
     result.append(str, path.directory.first + versionLen, path.directory.second - versionLen);
     result.append(str, path.filename.first, path.filename.second);
-    if (type == SourceType::Raster) {
+    if (type == style::SourceType::Raster || type == style::SourceType::RasterDEM) {
         result += tileSize == util::tileSize ? "@2x" : "{ratio}";
     }
 
@@ -168,6 +169,15 @@ canonicalizeTileURL(const std::string& str, const SourceType type, const uint16_
     }
 
     return result;
+}
+
+void canonicalizeTileset(Tileset& tileset, const std::string& sourceURL, style::SourceType type, uint16_t tileSize) {
+    // TODO: Remove this hack by delivering proper URLs in the TileJSON to begin with.
+    if (isMapboxURL(sourceURL)) {
+        for (auto& url : tileset.tiles) {
+            url = canonicalizeTileURL(url, type, tileSize);
+        }
+    }
 }
 
 const uint64_t DEFAULT_OFFLINE_TILE_COUNT_LIMIT = 6000;

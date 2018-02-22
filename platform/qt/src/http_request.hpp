@@ -3,10 +3,9 @@
 #include <mbgl/storage/http_file_source.hpp>
 #include <mbgl/util/async_request.hpp>
 
+#include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QUrl>
-
-class QNetworkReply;
 
 namespace mbgl {
 
@@ -21,7 +20,7 @@ public:
     QUrl requestUrl() const;
     QNetworkRequest networkRequest() const;
 
-    void handleNetworkReply(QNetworkReply *);
+    void handleNetworkReply(QNetworkReply *, const QByteArray& data);
 
 private:
     HTTPFileSource::Impl* m_context;

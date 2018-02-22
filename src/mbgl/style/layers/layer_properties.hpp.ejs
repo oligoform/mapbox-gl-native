@@ -10,27 +10,29 @@
 #include <mbgl/style/types.hpp>
 #include <mbgl/style/layout_property.hpp>
 #include <mbgl/style/paint_property.hpp>
+#include <mbgl/style/properties.hpp>
+#include <mbgl/programs/attributes.hpp>
+#include <mbgl/programs/uniforms.hpp>
 
 namespace mbgl {
 namespace style {
 
 <% for (const property of layoutProperties) { -%>
-struct <%- camelize(property.name) %> : LayoutProperty<<%- propertyType(property) %>> {
+struct <%- camelize(property.name) %> : <%- layoutPropertyType(property, type) %> {
     static constexpr const char * key = "<%- property.name %>";
-    static <%- propertyType(property) %> defaultValue() { return <%- defaultValue(property) %>; }
+    static <%- evaluatedType(property) %> defaultValue() { return <%- defaultValue(property) %>; }
 };
 
 <% } -%>
 <% for (const property of paintProperties) { -%>
-struct <%- camelize(property.name) %> : <%
-if (/-pattern$/.test(property.name) || property.name === 'line-dasharray') {
-%>CrossFaded<% } -%>PaintProperty<<%- propertyType(property) %>> {
-    static <%- propertyType(property) %> defaultValue() { return <%- defaultValue(property) %>; }
+<%   if (property.name === 'heatmap-color') continue; -%>
+struct <%- camelize(property.name) %> : <%- paintPropertyType(property, type) %> {
+    static <%- evaluatedType(property) %> defaultValue() { return <%- defaultValue(property) %>; }
 };
 
 <% } -%>
 <% if (layoutProperties.length) { -%>
-class <%- camelize(type) %>LayoutProperties : public LayoutProperties<
+class <%- camelize(type) %>LayoutProperties : public Properties<
 <% for (const property of layoutProperties.slice(0, -1)) { -%>
     <%- camelize(property.name) %>,
 <% } -%>
@@ -38,7 +40,7 @@ class <%- camelize(type) %>LayoutProperties : public LayoutProperties<
 > {};
 
 <% } -%>
-class <%- camelize(type) %>PaintProperties : public PaintProperties<
+class <%- camelize(type) %>PaintProperties : public Properties<
 <% for (const property of paintProperties.slice(0, -1)) { -%>
     <%- camelize(property.name) %>,
 <% } -%>

@@ -1,8 +1,7 @@
 #include <mbgl/test/util.hpp>
 
+#include <mbgl/renderer/backend_scope.hpp>
 #include <mbgl/gl/headless_backend.hpp>
-#include <mbgl/gl/offscreen_view.hpp>
-
 #include <mbgl/gl/context.hpp>
 
 #include <memory>
@@ -25,20 +24,6 @@ struct MockGLObject {
 
 const bool MockGLObject::Default = false;
 
-TEST(GLObject, PreserveState) {
-    getFlag = false;
-    setFlag = false;
-
-    auto object = std::make_unique<gl::PreserveState<MockGLObject>>();
-    EXPECT_TRUE(getFlag);
-    EXPECT_FALSE(setFlag);
-
-    getFlag = false;
-    object.reset();
-    EXPECT_FALSE(getFlag);
-    EXPECT_TRUE(setFlag);
-}
-
 TEST(GLObject, Value) {
     setFlag = false;
 
@@ -60,8 +45,8 @@ TEST(GLObject, Value) {
 }
 
 TEST(GLObject, Store) {
-    HeadlessBackend backend { test::sharedDisplay() };
-    OffscreenView view(backend.getContext());
+    HeadlessBackend backend { { 256, 256 } };
+    BackendScope scope { backend };
 
     gl::Context context;
     EXPECT_TRUE(context.empty());
@@ -77,6 +62,4 @@ TEST(GLObject, Store) {
 
     context.reset();
     EXPECT_TRUE(context.empty());
-
-    backend.deactivate();
 }

@@ -1,5 +1,6 @@
 package com.mapbox.mapboxsdk.utils;
 
+// TODO Remove this class if we finally include it within MAS 3.x (GeoJSON)
 public class MathUtils {
 
   /**
@@ -44,23 +45,5 @@ public class MathUtils {
     double secondMod = (firstMod + delta) % delta;
 
     return secondMod + min;
-  }
-
-  /**
-   * Convert bearing from core to match Android SDK value.
-   *
-   * @param nativeBearing bearing value coming from core
-   * @return bearing in degrees starting from 0 rotating clockwise
-   */
-  public static double convertNativeBearing(double nativeBearing) {
-    double direction = -nativeBearing;
-
-    while (direction > 360) {
-      direction -= 360;
-    }
-    while (direction < 0) {
-      direction += 360;
-    }
-    return direction;
   }
 }

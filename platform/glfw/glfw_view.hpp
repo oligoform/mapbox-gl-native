@@ -1,19 +1,15 @@
 #pragma once
 
 #include <mbgl/map/map.hpp>
-#include <mbgl/map/view.hpp>
-#include <mbgl/map/backend.hpp>
+#include <mbgl/renderer/renderer_backend.hpp>
 #include <mbgl/util/run_loop.hpp>
 #include <mbgl/util/timer.hpp>
 #include <mbgl/util/geometry.hpp>
 
-#if MBGL_USE_GLES2
-#define GLFW_INCLUDE_ES2
-#endif
-#define GL_GLEXT_PROTOTYPES
-#include <GLFW/glfw3.h>
+struct GLFWwindow;
+class GLFWRendererFrontend;
 
-class GLFWView : public mbgl::View, public mbgl::Backend {
+class GLFWView : public mbgl::RendererBackend, public mbgl::MapObserver {
 public:
     GLFWView(bool fullscreen = false, bool benchmark = false);
     ~GLFWView() override;
@@ -21,27 +17,44 @@ public:
     float getPixelRatio() const;
 
     void setMap(mbgl::Map*);
+    
+    void setRenderFrontend(GLFWRendererFrontend*);
 
     // Callback called when the user presses the key mapped to style change.
     // The expected action is to set a new style, different to the current one.
     void setChangeStyleCallback(std::function<void()> callback);
+
+    void setPauseResumeCallback(std::function<void()> callback) {
+        pauseResumeCallback = callback;
+    };
+
+    void setOnlineStatusCallback(std::function<void()> callback) {
+        onlineStatusCallback = callback;
+    }
 
     void setShouldClose();
 
     void setWindowTitle(const std::string&);
 
     void run();
+    
+    void invalidate();
 
-    // mbgl::View implementation
-    void updateViewBinding();
-    void bind() override;
     mbgl::Size getSize() const;
-    mbgl::Size getFramebufferSize() const;
+    mbgl::Size getFramebufferSize() const override;
 
+    // mbgl::RendererBackend implementation
+    void bind() override;
+    void updateAssumedState() override;
+
+    // mbgl::MapObserver implementation
+    void onDidFinishLoadingStyle() override;
+
+protected:
     // mbgl::Backend implementation
+    mbgl::gl::ProcAddress getExtensionFunctionPointer(const char*) override;
     void activate() override;
     void deactivate() override;
-    void invalidate() override;
 
 private:
     // Window callbacks
@@ -54,14 +67,10 @@ private:
 
     // Internal
     void report(float duration);
-    
-    void setMapChangeCallback(std::function<void(mbgl::MapChange)> callback);
-    void notifyMapChange(mbgl::MapChange change) override;
 
     mbgl::Color makeRandomColor() const;
     mbgl::Point<double> makeRandomPoint() const;
-    static std::shared_ptr<const mbgl::SpriteImage>
-    makeSpriteImage(int width, int height, float pixelRatio);
+    static std::unique_ptr<mbgl::style::Image> makeImage(const std::string& id, int width, int height, float pixelRatio);
 
     void nextOrientation();
 
@@ -69,6 +78,8 @@ private:
     void addRandomLineAnnotations(int count);
     void addRandomShapeAnnotations(int count);
     void addRandomCustomPointAnnotations(int count);
+    void addAnimatedAnnotation();
+    void updateAnimatedAnnotations();
 
     void clearAnnotations();
     void popAnnotation();
@@ -76,16 +87,21 @@ private:
     mbgl::AnnotationIDs annotationIDs;
     std::vector<std::string> spriteIDs;
 
-    std::function<void(mbgl::MapChange)> mapChangeCallback;
+    mbgl::AnnotationIDs animatedAnnotationIDs;
+    std::vector<double> animatedAnnotationAddedTimes;
 
 private:
+    void toggle3DExtrusions(bool visible);
+
     mbgl::Map* map = nullptr;
+    GLFWRendererFrontend* rendererFrontend = nullptr;
 
     bool fullscreen = false;
     const bool benchmark = false;
     bool tracking = false;
     bool rotating = false;
     bool pitching = false;
+    bool show3DExtrusions = false;
 
     // Frame timer
     int frames = 0;
@@ -103,6 +119,9 @@ private:
     double lastClick = -1;
 
     std::function<void()> changeStyleCallback;
+    std::function<void()> pauseResumeCallback;
+    std::function<void()> onlineStatusCallback;
+    std::function<void(mbgl::Map*)> animateRouteCallback;
 
     mbgl::util::RunLoop runLoop;
     mbgl::util::Timer frameTick;

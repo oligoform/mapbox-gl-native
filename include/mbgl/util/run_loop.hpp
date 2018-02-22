@@ -16,7 +16,7 @@
 namespace mbgl {
 namespace util {
 
-typedef void * LOOP_HANDLE;
+using LOOP_HANDLE = void *;
 
 class RunLoop : public Scheduler,
                 private util::noncopyable {
@@ -24,6 +24,11 @@ public:
     enum class Type : uint8_t {
         Default,
         New,
+    };
+
+    enum class Priority : bool {
+        Default = false,
+        High = true,
     };
 
     enum class Event : uint8_t {
@@ -49,9 +54,14 @@ public:
 
     // Invoke fn(args...) on this RunLoop.
     template <class Fn, class... Args>
+    void invoke(Priority priority, Fn&& fn, Args&&... args) {
+        push(priority, WorkTask::make(std::forward<Fn>(fn), std::forward<Args>(args)...));
+    }
+
+    // Invoke fn(args...) on this RunLoop.
+    template <class Fn, class... Args>
     void invoke(Fn&& fn, Args&&... args) {
-        std::shared_ptr<WorkTask> task = WorkTask::make(std::forward<Fn>(fn), std::forward<Args>(args)...);
-        push(task);
+        invoke(Priority::Default, std::forward<Fn>(fn), std::forward<Args>(args)...);
     }
 
     // Post the cancellable work fn(args...) to this RunLoop.
@@ -59,17 +69,14 @@ public:
     std::unique_ptr<AsyncRequest>
     invokeCancellable(Fn&& fn, Args&&... args) {
         std::shared_ptr<WorkTask> task = WorkTask::make(std::forward<Fn>(fn), std::forward<Args>(args)...);
-        push(task);
+        push(Priority::Default, task);
         return std::make_unique<WorkRequest>(task);
     }
-
-    // Invoke fn(args...) on this RunLoop, then invoke callback(results...) on the current RunLoop.
-    template <class Fn, class... Args>
-    std::unique_ptr<AsyncRequest>
-    invokeWithCallback(Fn&& fn, Args&&... args) {
-        std::shared_ptr<WorkTask> task = WorkTask::makeWithCallback(std::forward<Fn>(fn), std::forward<Args>(args)...);
-        push(task);
-        return std::make_unique<WorkRequest>(task);
+                    
+    void schedule(std::weak_ptr<Mailbox> mailbox) override {
+        invoke([mailbox] () {
+            Mailbox::maybeReceive(mailbox);
+        });
     }
 
     class Impl;
@@ -79,30 +86,42 @@ private:
 
     using Queue = std::queue<std::shared_ptr<WorkTask>>;
 
-    void push(std::shared_ptr<WorkTask>);
+    // Wakes up the RunLoop so that it starts processing items in the queue.
+    void wake();
 
-    void schedule(std::weak_ptr<Mailbox> mailbox) override {
-        invoke([mailbox] () {
-            Mailbox::maybeReceive(mailbox);
-        });
-    }
-
-    void withMutex(std::function<void()>&& fn) {
+    // Adds a WorkTask to the queue, and wakes it up.
+    void push(Priority priority, std::shared_ptr<WorkTask> task) {
         std::lock_guard<std::mutex> lock(mutex);
-        fn();
+        if (priority == Priority::High) {
+            highPriorityQueue.emplace(std::move(task));
+        } else {
+            defaultQueue.emplace(std::move(task));
+        }
+        wake();
     }
 
     void process() {
-        Queue queue_;
-        withMutex([&] { queue_.swap(queue); });
-
-        while (!queue_.empty()) {
-            (*(queue_.front()))();
-            queue_.pop();
+        std::shared_ptr<WorkTask> task;
+        std::unique_lock<std::mutex> lock(mutex);
+        while (true) {
+            if (!highPriorityQueue.empty()) {
+                task = std::move(highPriorityQueue.front());
+                highPriorityQueue.pop();
+            } else if (!defaultQueue.empty()) {
+                task = std::move(defaultQueue.front());
+                defaultQueue.pop();
+            } else {
+                break;
+            }
+            lock.unlock();
+            (*task)();
+            task.reset();
+            lock.lock();
         }
     }
 
-    Queue queue;
+    Queue defaultQueue;
+    Queue highPriorityQueue;
     std::mutex mutex;
 
     std::unique_ptr<Impl> impl;

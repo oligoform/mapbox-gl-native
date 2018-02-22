@@ -1,58 +1,61 @@
 package com.mapbox.mapboxsdk.maps;
 
-import android.app.Activity;
-import android.app.Dialog;
-import android.app.Fragment;
-import android.content.BroadcastReceiver;
 import android.content.Context;
-import android.content.DialogInterface;
-import android.content.Intent;
-import android.content.IntentFilter;
-import android.graphics.Canvas;
 import android.graphics.PointF;
-import android.graphics.SurfaceTexture;
-import android.net.ConnectivityManager;
-import android.net.NetworkInfo;
-import android.net.Uri;
+import android.opengl.GLSurfaceView;
+import android.os.Build;
 import android.os.Bundle;
 import android.support.annotation.CallSuper;
 import android.support.annotation.IntDef;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.UiThread;
-import android.support.v7.app.AlertDialog;
-import android.text.TextUtils;
+import android.support.v4.util.LongSparseArray;
 import android.util.AttributeSet;
 import android.view.KeyEvent;
 import android.view.LayoutInflater;
 import android.view.MotionEvent;
-import android.view.Surface;
-import android.view.SurfaceHolder;
-import android.view.SurfaceView;
 import android.view.TextureView;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ArrayAdapter;
+import android.view.ViewTreeObserver;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
+import android.widget.ZoomButtonsController;
 
-import com.mapbox.mapboxsdk.Mapbox;
+import com.mapbox.android.telemetry.AppUserTurnstile;
+import com.mapbox.android.telemetry.Event;
+import com.mapbox.android.telemetry.MapEventFactory;
+import com.mapbox.android.telemetry.MapboxTelemetry;
+import com.mapbox.mapboxsdk.BuildConfig;
 import com.mapbox.mapboxsdk.R;
+import com.mapbox.mapboxsdk.annotations.Annotation;
 import com.mapbox.mapboxsdk.annotations.MarkerViewManager;
-import com.mapbox.mapboxsdk.camera.CameraPosition;
 import com.mapbox.mapboxsdk.constants.MapboxConstants;
 import com.mapbox.mapboxsdk.constants.Style;
+import com.mapbox.mapboxsdk.maps.renderer.MapRenderer;
+import com.mapbox.mapboxsdk.maps.renderer.glsurfaceview.GLSurfaceViewMapRenderer;
+import com.mapbox.mapboxsdk.maps.renderer.textureview.TextureViewMapRenderer;
 import com.mapbox.mapboxsdk.maps.widgets.CompassView;
 import com.mapbox.mapboxsdk.maps.widgets.MyLocationView;
 import com.mapbox.mapboxsdk.maps.widgets.MyLocationViewSettings;
-import com.mapbox.mapboxsdk.telemetry.MapboxEvent;
-import com.mapbox.mapboxsdk.telemetry.MapboxEventManager;
+import com.mapbox.mapboxsdk.net.ConnectivityReceiver;
+import com.mapbox.mapboxsdk.storage.FileSource;
 
+import javax.microedition.khronos.egl.EGLConfig;
+import javax.microedition.khronos.opengles.GL10;
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
+import java.lang.ref.WeakReference;
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+import timber.log.Timber;
+
+import static com.mapbox.mapboxsdk.maps.widgets.CompassView.TIME_MAP_NORTH_ANIMATION;
+import static com.mapbox.mapboxsdk.maps.widgets.CompassView.TIME_WAIT_IDLE;
 
 /**
  * <p>
@@ -70,20 +73,27 @@ import java.util.List;
  */
 public class MapView extends FrameLayout {
 
-  private NativeMapView nativeMapView;
-  private boolean destroyed;
-  private boolean hasSurface = false;
-
+  private final MapCallback mapCallback = new MapCallback();
   private MapboxMap mapboxMap;
-  private MapCallback mapCallback;
-  private boolean onStartCalled;
-  private boolean onStopCalled;
+
+  private NativeMapView nativeMapView;
+  private MapboxMapOptions mapboxMapOptions;
+  private boolean destroyed;
+  private boolean hasSurface;
+
+  private MyLocationView myLocationView;
+  private CompassView compassView;
+  private PointF focalPoint;
+  private ImageView attrView;
+  private ImageView logoView;
 
   private MapGestureDetector mapGestureDetector;
   private MapKeyListener mapKeyListener;
   private MapZoomButtonController mapZoomButtonController;
+  private Bundle savedInstanceState;
+  private final CopyOnWriteArrayList<OnMapChangedListener> onMapChangedListeners = new CopyOnWriteArrayList<>();
 
-  private ConnectivityReceiver connectivityReceiver;
+  private MapRenderer mapRenderer;
 
   @UiThread
   public MapView(@NonNull Context context) {
@@ -106,52 +116,89 @@ public class MapView extends FrameLayout {
   @UiThread
   public MapView(@NonNull Context context, @Nullable MapboxMapOptions options) {
     super(context);
-    initialise(context, options);
+    initialise(context, options == null ? MapboxMapOptions.createFromAttributes(context, null) : options);
   }
 
   private void initialise(@NonNull final Context context, @NonNull final MapboxMapOptions options) {
     if (isInEditMode()) {
-      // in IDE, show preview map
-      LayoutInflater.from(context).inflate(R.layout.mapbox_mapview_preview, this);
+      // in IDE layout editor, just return
       return;
     }
+    mapboxMapOptions = options;
 
     // inflate view
     View view = LayoutInflater.from(context).inflate(R.layout.mapbox_mapview_internal, this);
-    CompassView compassView = (CompassView) view.findViewById(R.id.compassView);
-    MyLocationView myLocationView = (MyLocationView) view.findViewById(R.id.userLocationView);
-    ImageView attrView = (ImageView) view.findViewById(R.id.attributionView);
-    initalizeDrawingSurface(context, options);
+    compassView = (CompassView) view.findViewById(R.id.compassView);
+    myLocationView = (MyLocationView) view.findViewById(R.id.userLocationView);
+    attrView = (ImageView) view.findViewById(R.id.attributionView);
+    logoView = (ImageView) view.findViewById(R.id.logoView);
 
-    // create native Map object
-    nativeMapView = new NativeMapView(this);
+    // add accessibility support
+    setContentDescription(context.getString(R.string.mapbox_mapActionDescription));
+    setWillNotDraw(false);
+
+    getViewTreeObserver().addOnGlobalLayoutListener(new MapViewLayoutListener(this, options));
+  }
+
+  private void initialiseMap() {
+    Context context = getContext();
+    addOnMapChangedListener(mapCallback);
 
     // callback for focal point invalidation
-    FocalPointInvalidator focalPoint = new FocalPointInvalidator();
+    final FocalPointInvalidator focalPointInvalidator = new FocalPointInvalidator();
+    focalPointInvalidator.addListener(createFocalPointChangeListener());
 
     // callback for registering touch listeners
     RegisterTouchListener registerTouchListener = new RegisterTouchListener();
 
+    // callback for zooming in the camera
+    CameraZoomInvalidator zoomInvalidator = new CameraZoomInvalidator();
+
+    // callback for camera change events
+    final CameraChangeDispatcher cameraChangeDispatcher = new CameraChangeDispatcher();
+
     // setup components for MapboxMap creation
     Projection proj = new Projection(nativeMapView);
-    UiSettings uiSettings = new UiSettings(proj, focalPoint, compassView, attrView, view.findViewById(R.id.logoView));
-    TrackingSettings trackingSettings = new TrackingSettings(myLocationView, uiSettings, focalPoint);
-    MyLocationViewSettings myLocationViewSettings = new MyLocationViewSettings(myLocationView, proj, focalPoint);
+    UiSettings uiSettings = new UiSettings(proj, focalPointInvalidator, compassView, attrView, logoView);
+    TrackingSettings trackingSettings = new TrackingSettings(myLocationView, uiSettings, focalPointInvalidator,
+      zoomInvalidator);
+    MyLocationViewSettings myLocationViewSettings = new MyLocationViewSettings(myLocationView, proj,
+      focalPointInvalidator);
+    LongSparseArray<Annotation> annotationsArray = new LongSparseArray<>();
     MarkerViewManager markerViewManager = new MarkerViewManager((ViewGroup) findViewById(R.id.markerViewContainer));
-    AnnotationManager annotations = new AnnotationManager(nativeMapView, this, markerViewManager);
-    Transform transform = new Transform(nativeMapView, annotations.getMarkerViewManager(), trackingSettings);
+    IconManager iconManager = new IconManager(nativeMapView);
+    Annotations annotations = new AnnotationContainer(nativeMapView, annotationsArray);
+    Markers markers = new MarkerContainer(nativeMapView, this, annotationsArray, iconManager, markerViewManager);
+    Polygons polygons = new PolygonContainer(nativeMapView, annotationsArray);
+    Polylines polylines = new PolylineContainer(nativeMapView, annotationsArray);
+    ShapeAnnotations shapeAnnotations = new ShapeAnnotationContainer(nativeMapView, annotationsArray);
+    AnnotationManager annotationManager = new AnnotationManager(nativeMapView, this, annotationsArray,
+      markerViewManager, iconManager, annotations, markers, polygons, polylines, shapeAnnotations);
+    Transform transform = new Transform(nativeMapView, annotationManager.getMarkerViewManager(), trackingSettings,
+      cameraChangeDispatcher);
+
     mapboxMap = new MapboxMap(nativeMapView, transform, uiSettings, trackingSettings, myLocationViewSettings, proj,
-      registerTouchListener, annotations);
+      registerTouchListener, annotationManager, cameraChangeDispatcher);
+    focalPointInvalidator.addListener(mapboxMap.createFocalPointChangeListener());
+
+    mapCallback.attachMapboxMap(mapboxMap);
 
     // user input
-    mapGestureDetector = new MapGestureDetector(context, transform, proj, uiSettings, trackingSettings, annotations);
+    mapGestureDetector = new MapGestureDetector(context, transform, proj, uiSettings, trackingSettings,
+      annotationManager, cameraChangeDispatcher);
     mapKeyListener = new MapKeyListener(transform, trackingSettings, uiSettings);
-    mapZoomButtonController = new MapZoomButtonController(this, uiSettings, transform);
 
+    // overlain zoom buttons
+    mapZoomButtonController = new MapZoomButtonController(new ZoomButtonsController(this));
+    MapZoomControllerListener zoomListener = new MapZoomControllerListener(mapGestureDetector, uiSettings, transform,
+      cameraChangeDispatcher, getWidth(), getHeight());
+    mapZoomButtonController.bind(uiSettings, zoomListener);
+
+    compassView.injectCompassAnimationListener(createCompassAnimationListener(cameraChangeDispatcher));
+    compassView.setOnClickListener(createCompassClickListener(cameraChangeDispatcher));
     // inject widgets with MapboxMap
-    compassView.setMapboxMap(mapboxMap);
     myLocationView.setMapboxMap(mapboxMap);
-    attrView.setOnClickListener(new AttributionOnClickListener(context, transform));
+    attrView.setOnClickListener(new AttributionClickListener(context, mapboxMap));
 
     // Ensure this view is interactable
     setClickable(true);
@@ -160,26 +207,58 @@ public class MapView extends FrameLayout {
     setFocusableInTouchMode(true);
     requestDisallowInterceptTouchEvent(true);
 
-    // allow onDraw invocation
-    setWillNotDraw(false);
-
     // notify Map object about current connectivity state
-    nativeMapView.setReachability(isConnected());
+    nativeMapView.setReachability(ConnectivityReceiver.instance(context).isConnected(context));
 
     // initialise MapboxMap
-    mapboxMap.initialise(context, options);
+    if (savedInstanceState == null) {
+      mapboxMap.initialise(context, mapboxMapOptions);
+    } else {
+      mapboxMap.onRestoreInstanceState(savedInstanceState);
+    }
   }
 
-  private void initalizeDrawingSurface(Context context, MapboxMapOptions options) {
-    if (options.getTextureMode()) {
-      TextureView textureView = new TextureView(context);
-      textureView.setSurfaceTextureListener(new SurfaceTextureListener());
-      addView(textureView, 0);
-    } else {
-      SurfaceView surfaceView = (SurfaceView) findViewById(R.id.surfaceView);
-      surfaceView.getHolder().addCallback(new SurfaceCallback());
-      surfaceView.setVisibility(View.VISIBLE);
-    }
+  private FocalPointChangeListener createFocalPointChangeListener() {
+    return new FocalPointChangeListener() {
+      @Override
+      public void onFocalPointChanged(PointF pointF) {
+        focalPoint = pointF;
+      }
+    };
+  }
+
+  private MapboxMap.OnCompassAnimationListener createCompassAnimationListener(final CameraChangeDispatcher
+                                                                                cameraChangeDispatcher) {
+    return new MapboxMap.OnCompassAnimationListener() {
+      @Override
+      public void onCompassAnimation() {
+        cameraChangeDispatcher.onCameraMove();
+      }
+
+      @Override
+      public void onCompassAnimationFinished() {
+        compassView.isAnimating(false);
+        cameraChangeDispatcher.onCameraIdle();
+      }
+    };
+  }
+
+  private OnClickListener createCompassClickListener(final CameraChangeDispatcher cameraChangeDispatcher) {
+    return new OnClickListener() {
+      @Override
+      public void onClick(View v) {
+        if (mapboxMap != null && compassView != null) {
+          if (focalPoint != null) {
+            mapboxMap.setFocalBearing(0, focalPoint.x, focalPoint.y, TIME_MAP_NORTH_ANIMATION);
+          } else {
+            mapboxMap.setFocalBearing(0, mapboxMap.getWidth() / 2, mapboxMap.getHeight() / 2, TIME_MAP_NORTH_ANIMATION);
+          }
+          cameraChangeDispatcher.onCameraMoveStarted(MapboxMap.OnCameraMoveStartedListener.REASON_API_ANIMATION);
+          compassView.isAnimating(true);
+          compassView.postDelayed(compassView, TIME_WAIT_IDLE + TIME_MAP_NORTH_ANIMATION);
+        }
+      }
+    };
   }
 
   //
@@ -188,118 +267,163 @@ public class MapView extends FrameLayout {
 
   /**
    * <p>
-   * You must call this method from the parent's {@link android.app.Activity#onCreate(Bundle)} or
-   * {@link android.app.Fragment#onCreate(Bundle)}.
+   * You must call this method from the parent's Activity#onCreate(Bundle)} or
+   * Fragment#onViewCreated(View, Bundle).
    * </p>
-   * You must set a valid access token with {@link Mapbox#getInstance(Context, String)}) before you call this method
-   * or an exception will be thrown.
+   * You must set a valid access token with {@link com.mapbox.mapboxsdk.Mapbox#getInstance(Context, String)}
+   * before you call this method or an exception will be thrown.
    *
    * @param savedInstanceState Pass in the parent's savedInstanceState.
-   * @see Mapbox#getInstance(Context, String)
+   * @see com.mapbox.mapboxsdk.Mapbox#getInstance(Context, String)
    */
   @UiThread
   public void onCreate(@Nullable Bundle savedInstanceState) {
-    nativeMapView.setAccessToken(Mapbox.getAccessToken());
-
     if (savedInstanceState == null) {
-      MapboxEvent.trackMapLoadEvent();
+      MapboxTelemetry telemetry = Events.obtainTelemetry();
+      AppUserTurnstile turnstileEvent = new AppUserTurnstile(BuildConfig.MAPBOX_SDK_IDENTIFIER,
+        BuildConfig.MAPBOX_SDK_VERSION);
+      telemetry.push(turnstileEvent);
+      MapEventFactory mapEventFactory = new MapEventFactory();
+      telemetry.push(mapEventFactory.createMapLoadEvent(Event.Type.MAP_LOAD));
     } else if (savedInstanceState.getBoolean(MapboxConstants.STATE_HAS_SAVED_STATE)) {
-      mapboxMap.onRestoreInstanceState(savedInstanceState);
+      this.savedInstanceState = savedInstanceState;
+    }
+  }
+
+  private void initialiseDrawingSurface(MapboxMapOptions options) {
+    if (options.getTextureMode()) {
+      TextureView textureView = new TextureView(getContext());
+      mapRenderer = new TextureViewMapRenderer(getContext(), textureView, options.getLocalIdeographFontFamily()) {
+        @Override
+        protected void onSurfaceCreated(GL10 gl, EGLConfig config) {
+          MapView.this.onSurfaceCreated();
+          super.onSurfaceCreated(gl, config);
+        }
+      };
+
+      addView(textureView, 0);
+    } else {
+      GLSurfaceView glSurfaceView = new GLSurfaceView(getContext());
+      glSurfaceView.setZOrderMediaOverlay(mapboxMapOptions.getRenderSurfaceOnTop());
+      mapRenderer = new GLSurfaceViewMapRenderer(getContext(), glSurfaceView, options.getLocalIdeographFontFamily()) {
+        @Override
+        public void onSurfaceCreated(GL10 gl, EGLConfig config) {
+          MapView.this.onSurfaceCreated();
+          super.onSurfaceCreated(gl, config);
+        }
+      };
+
+      addView(glSurfaceView, 0);
     }
 
-    // Initialize EGL
-    nativeMapView.initializeDisplay();
-    nativeMapView.initializeContext();
+    nativeMapView = new NativeMapView(this, mapRenderer);
+    nativeMapView.resizeView(getMeasuredWidth(), getMeasuredHeight());
+  }
 
-    addOnMapChangedListener(mapCallback = new MapCallback(mapboxMap));
+  private void onSurfaceCreated() {
+    hasSurface = true;
+    post(() -> {
+      // Initialise only when not destroyed and only once
+      if (!destroyed && mapboxMap == null) {
+        initialiseMap();
+        mapboxMap.onStart();
+      }
+    });
   }
 
   /**
-   * You must call this method from the parent's {@link android.app.Activity#onSaveInstanceState(Bundle)}
-   * or {@link android.app.Fragment#onSaveInstanceState(Bundle)}.
+   * You must call this method from the parent's Activity#onSaveInstanceState(Bundle)
+   * or Fragment#onSaveInstanceState(Bundle).
    *
    * @param outState Pass in the parent's outState.
    */
-
   @UiThread
   public void onSaveInstanceState(@NonNull Bundle outState) {
-    outState.putBoolean(MapboxConstants.STATE_HAS_SAVED_STATE, true);
-    mapboxMap.onSaveInstanceState(outState);
+    if (mapboxMap != null) {
+      outState.putBoolean(MapboxConstants.STATE_HAS_SAVED_STATE, true);
+      mapboxMap.onSaveInstanceState(outState);
+    }
   }
 
   /**
-   * You must call this method from the parent's {@link Activity#onStart()} or {@link Fragment#onStart()}
+   * You must call this method from the parent's Activity#onStart() or Fragment#onStart()
    */
   @UiThread
   public void onStart() {
-    onStartCalled = true;
-    mapboxMap.onStart();
-    registerConnectivityReceiver();
+    ConnectivityReceiver.instance(getContext()).activate();
+    FileSource.getInstance(getContext()).activate();
+    if (mapboxMap != null) {
+      mapboxMap.onStart();
+    }
+
+    if (mapRenderer != null) {
+      mapRenderer.onStart();
+    }
   }
 
   /**
-   * You must call this method from the parent's {@link Activity#onResume()} or {@link Fragment#onResume()}.
+   * You must call this method from the parent's Activity#onResume() or Fragment#onResume().
    */
   @UiThread
   public void onResume() {
-    if (!onStartCalled) {
-      // TODO: 26/10/16, can be removed after 5.0.0 release
-      throw new IllegalStateException("MapView#onStart() was not called. "
-        + "You must call this method from the parent's {@link Activity#onStart()} or {@link Fragment#onStart()}.");
+    if (mapRenderer != null) {
+      mapRenderer.onResume();
     }
   }
 
   /**
-   * You must call this method from the parent's {@link Activity#onPause()} or {@link Fragment#onPause()}.
+   * You must call this method from the parent's Activity#onPause() or Fragment#onPause().
    */
   @UiThread
   public void onPause() {
-    // replaced by onStop in v5.0.0, keep around for future development
+    if (mapRenderer != null) {
+      mapRenderer.onPause();
+    }
   }
 
   /**
-   * You must call this method from the parent's {@link Activity#onStop()} or {@link Fragment#onStop()}.
+   * You must call this method from the parent's Activity#onStop() or Fragment#onStop().
    */
   @UiThread
   public void onStop() {
-    onStopCalled = true;
-    mapboxMap.onStop();
-    unregisterConnectivityReceiver();
+    if (mapboxMap != null) {
+      // map was destroyed before it was started
+      mapboxMap.onStop();
+    }
+
+    if (mapRenderer != null) {
+      mapRenderer.onStop();
+    }
+
+    ConnectivityReceiver.instance(getContext()).deactivate();
+    FileSource.getInstance(getContext()).deactivate();
   }
 
   /**
-   * You must call this method from the parent's {@link Activity#onDestroy()} or {@link Fragment#onDestroy()}.
+   * You must call this method from the parent's Activity#onDestroy() or Fragment#onDestroyView().
    */
   @UiThread
   public void onDestroy() {
-    if (!onStopCalled) {
-      // TODO: 26/10/16, can be removed after 5.0.0 release
-      throw new IllegalStateException("MapView#onStop() was not called. "
-        + "You must call this method from the parent's {@link Activity#onStop()} or {@link Fragment#onStop()}.");
+    destroyed = true;
+    mapCallback.clearOnMapReadyCallbacks();
+
+    if (nativeMapView != null && hasSurface) {
+      // null when destroying an activity programmatically mapbox-navigation-android/issues/503
+      nativeMapView.destroy();
+      nativeMapView = null;
     }
 
-    destroyed = true;
-    nativeMapView.terminateContext();
-    nativeMapView.terminateDisplay();
-    nativeMapView.destroySurface();
-    nativeMapView.destroy();
-    nativeMapView = null;
-  }
-
-  private void registerConnectivityReceiver() {
-    getContext().registerReceiver(connectivityReceiver = new ConnectivityReceiver(),
-      new IntentFilter(ConnectivityManager.CONNECTIVITY_ACTION));
-  }
-
-  private void unregisterConnectivityReceiver() {
-    if (connectivityReceiver != null) {
-      getContext().unregisterReceiver(connectivityReceiver);
-      connectivityReceiver = null;
+    if (mapRenderer != null) {
+      mapRenderer.onDestroy();
     }
   }
 
   @Override
   public boolean onTouchEvent(MotionEvent event) {
+    if (!isMapInitialized() || !isZoomButtonControllerInitialized()) {
+      return super.onTouchEvent(event);
+    }
+
     if (event.getAction() == MotionEvent.ACTION_DOWN) {
       mapZoomButtonController.setVisible(true);
     }
@@ -328,11 +452,18 @@ public class MapView extends FrameLayout {
 
   @Override
   public boolean onGenericMotionEvent(MotionEvent event) {
+    if (mapGestureDetector == null) {
+      return super.onGenericMotionEvent(event);
+    }
     return mapGestureDetector.onGenericMotionEvent(event) || super.onGenericMotionEvent(event);
   }
 
   @Override
   public boolean onHoverEvent(MotionEvent event) {
+    if (!isZoomButtonControllerInitialized()) {
+      return super.onHoverEvent(event);
+    }
+
     switch (event.getActionMasked()) {
       case MotionEvent.ACTION_HOVER_ENTER:
       case MotionEvent.ACTION_HOVER_MOVE:
@@ -350,25 +481,12 @@ public class MapView extends FrameLayout {
   }
 
   /**
-   * You must call this method from the parent's {@link Activity#onLowMemory()} or {@link Fragment#onLowMemory()}.
+   * You must call this method from the parent's Activity#onLowMemory() or Fragment#onLowMemory().
    */
   @UiThread
   public void onLowMemory() {
-    nativeMapView.onLowMemory();
-  }
-
-  // Called when debug mode is enabled to update a FPS counter
-  // Called via JNI from NativeMapView
-  // Forward to any listener
-  protected void onFpsChanged(final double fps) {
-    final MapboxMap.OnFpsChangedListener listener = mapboxMap.getOnFpsChangedListener();
-    if (listener != null) {
-      post(new Runnable() {
-        @Override
-        public void run() {
-          listener.onFpsChanged(fps);
-        }
-      });
+    if (nativeMapView != null) {
+      nativeMapView.onLowMemory();
     }
   }
 
@@ -404,12 +522,10 @@ public class MapView extends FrameLayout {
     if (destroyed) {
       return;
     }
-
-    // stopgap for https://github.com/mapbox/mapbox-gl-native/issues/6242
-    if (TextUtils.isEmpty(nativeMapView.getAccessToken())) {
-      nativeMapView.setAccessToken(Mapbox.getAccessToken());
+    if (!isMapInitialized()) {
+      mapboxMapOptions.styleUrl(url);
+      return;
     }
-
     nativeMapView.setStyleUrl(url);
   }
 
@@ -417,116 +533,14 @@ public class MapView extends FrameLayout {
   // Rendering
   //
 
-  // Called when the map needs to be rerendered
-  // Called via JNI from NativeMapView
-  protected void onInvalidate() {
-    postInvalidate();
-  }
-
-  @Override
-  public void onDraw(Canvas canvas) {
-    super.onDraw(canvas);
-    if (isInEditMode()) {
-      return;
-    }
-
-    if (destroyed) {
-      return;
-    }
-
-    if (!hasSurface) {
-      return;
-    }
-
-    nativeMapView.render();
-  }
-
   @Override
   protected void onSizeChanged(int width, int height, int oldw, int oldh) {
     if (destroyed) {
       return;
     }
 
-    if (!isInEditMode()) {
+    if (!isInEditMode() && isMapInitialized()) {
       nativeMapView.resizeView(width, height);
-    }
-  }
-
-  private class SurfaceCallback implements SurfaceHolder.Callback {
-
-    private Surface surface;
-
-    @Override
-    public void surfaceCreated(SurfaceHolder holder) {
-      nativeMapView.createSurface(surface = holder.getSurface());
-      hasSurface = true;
-    }
-
-    @Override
-    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-      if (destroyed) {
-        return;
-      }
-      nativeMapView.resizeFramebuffer(width, height);
-    }
-
-    @Override
-    public void surfaceDestroyed(SurfaceHolder holder) {
-      hasSurface = false;
-
-      if (nativeMapView != null) {
-        nativeMapView.destroySurface();
-      }
-      surface.release();
-    }
-  }
-
-  // This class handles TextureView callbacks
-  private class SurfaceTextureListener implements TextureView.SurfaceTextureListener {
-
-    private Surface surface;
-
-    // Called when the native surface texture has been created
-    // Must do all EGL/GL ES initialization here
-    @Override
-    public void onSurfaceTextureAvailable(SurfaceTexture surface, int width, int height) {
-      nativeMapView.createSurface(this.surface = new Surface(surface));
-      nativeMapView.resizeFramebuffer(width, height);
-      hasSurface = true;
-    }
-
-    // Called when the native surface texture has been destroyed
-    // Must do all EGL/GL ES destruction here
-    @Override
-    public boolean onSurfaceTextureDestroyed(SurfaceTexture surface) {
-      hasSurface = false;
-
-      if (nativeMapView != null) {
-        nativeMapView.destroySurface();
-      }
-      this.surface.release();
-      return true;
-    }
-
-    // Called when the format or size of the native surface texture has been changed
-    // Must handle window resizing here.
-    @Override
-    public void onSurfaceTextureSizeChanged(SurfaceTexture surface, int width, int height) {
-      if (destroyed) {
-        return;
-      }
-
-      nativeMapView.resizeFramebuffer(width, height);
-    }
-
-    // Called when the SurfaceTexure frame is drawn to screen
-    // Must sync with UI here
-    @Override
-    public void onSurfaceTextureUpdated(SurfaceTexture surface) {
-      if (destroyed) {
-        return;
-      }
-      mapboxMap.onUpdate();
     }
   }
 
@@ -539,7 +553,9 @@ public class MapView extends FrameLayout {
   @CallSuper
   protected void onDetachedFromWindow() {
     super.onDetachedFromWindow();
-    mapZoomButtonController.setVisible(false);
+    if (isZoomButtonControllerInitialized()) {
+      mapZoomButtonController.setVisible(false);
+    }
   }
 
   // Called when view is hidden and shown
@@ -548,36 +564,25 @@ public class MapView extends FrameLayout {
     if (isInEditMode()) {
       return;
     }
-    mapZoomButtonController.setVisible(visibility == View.VISIBLE);
-  }
 
-  //
-  // Connectivity events
-  //
-
-  // This class handles connectivity changes
-  private class ConnectivityReceiver extends BroadcastReceiver {
-
-    // Called when an action we are listening to in the manifest has been sent
-    @Override
-    public void onReceive(Context context, Intent intent) {
-      if (!destroyed && intent.getAction().equals(ConnectivityManager.CONNECTIVITY_ACTION)) {
-        nativeMapView.setReachability(!intent.getBooleanExtra(ConnectivityManager.EXTRA_NO_CONNECTIVITY, false));
-      }
+    if (isZoomButtonControllerInitialized()) {
+      mapZoomButtonController.setVisible(visibility == View.VISIBLE);
     }
-  }
-
-  // Called when MapView is being created
-  private boolean isConnected() {
-    ConnectivityManager connectivityManager = (ConnectivityManager)
-      getContext().getSystemService(Context.CONNECTIVITY_SERVICE);
-    NetworkInfo activeNetwork = connectivityManager.getActiveNetworkInfo();
-    return (activeNetwork != null) && activeNetwork.isConnectedOrConnecting();
   }
 
   //
   // Map events
   //
+
+  void onMapChange(int rawChange) {
+    for (MapView.OnMapChangedListener onMapChangedListener : onMapChangedListeners) {
+      try {
+        onMapChangedListener.onMapChanged(rawChange);
+      } catch (RuntimeException err) {
+        Timber.e(err, "Exception in MapView.OnMapChangedListener");
+      }
+    }
+  }
 
   /**
    * <p>
@@ -590,7 +595,7 @@ public class MapView extends FrameLayout {
    */
   public void addOnMapChangedListener(@Nullable OnMapChangedListener listener) {
     if (listener != null) {
-      nativeMapView.addOnMapChangedListener(listener);
+      onMapChangedListeners.add(listener);
     }
   }
 
@@ -602,7 +607,7 @@ public class MapView extends FrameLayout {
    */
   public void removeOnMapChangedListener(@Nullable OnMapChangedListener listener) {
     if (listener != null) {
-      nativeMapView.removeOnMapChangedListener(listener);
+      onMapChangedListeners.remove(listener);
     }
   }
 
@@ -622,84 +627,20 @@ public class MapView extends FrameLayout {
     }
   }
 
+  private boolean isMapInitialized() {
+    return nativeMapView != null;
+  }
+
+  private boolean isZoomButtonControllerInitialized() {
+    return mapZoomButtonController != null;
+  }
+
   MapboxMap getMapboxMap() {
     return mapboxMap;
   }
 
   void setMapboxMap(MapboxMap mapboxMap) {
     this.mapboxMap = mapboxMap;
-  }
-
-  private static class AttributionOnClickListener implements View.OnClickListener, DialogInterface.OnClickListener {
-
-    private static final int ATTRIBUTION_INDEX_IMPROVE_THIS_MAP = 2;
-    private static final int ATTRIBUTION_INDEX_TELEMETRY_SETTINGS = 3;
-    private Context context;
-    private Transform transform;
-
-    public AttributionOnClickListener(Context context, Transform transform) {
-      this.context = context;
-      this.transform = transform;
-    }
-
-    // Called when someone presses the attribution icon
-    @Override
-    public void onClick(View view) {
-      AlertDialog.Builder builder = new AlertDialog.Builder(context, R.style.mapbox_AlertDialogStyle);
-      builder.setTitle(R.string.mapbox_attributionsDialogTitle);
-      String[] items = context.getResources().getStringArray(R.array.mapbox_attribution_names);
-      builder.setAdapter(new ArrayAdapter<>(context, R.layout.mapbox_attribution_list_item, items), this);
-      builder.show();
-    }
-
-    // Called when someone selects an attribution, 'Improve this map' adds location data to the url
-    @Override
-    public void onClick(DialogInterface dialog, int which) {
-      final Context context = ((Dialog) dialog).getContext();
-      if (which == ATTRIBUTION_INDEX_TELEMETRY_SETTINGS) {
-        AlertDialog.Builder builder = new AlertDialog.Builder(context, R.style.mapbox_AlertDialogStyle);
-        builder.setTitle(R.string.mapbox_attributionTelemetryTitle);
-        builder.setMessage(R.string.mapbox_attributionTelemetryMessage);
-        builder.setPositiveButton(R.string.mapbox_attributionTelemetryPositive, new DialogInterface.OnClickListener() {
-          @Override
-          public void onClick(DialogInterface dialog, int which) {
-            MapboxEventManager.getMapboxEventManager().setTelemetryEnabled(true);
-            dialog.cancel();
-          }
-        });
-        builder.setNeutralButton(R.string.mapbox_attributionTelemetryNeutral, new DialogInterface.OnClickListener() {
-          @Override
-          public void onClick(DialogInterface dialog, int which) {
-            String url = context.getResources().getStringArray(R.array.mapbox_attribution_links)[3];
-            Intent intent = new Intent(Intent.ACTION_VIEW);
-            intent.setData(Uri.parse(url));
-            context.startActivity(intent);
-            dialog.cancel();
-          }
-        });
-        builder.setNegativeButton(R.string.mapbox_attributionTelemetryNegative, new DialogInterface.OnClickListener() {
-          @Override
-          public void onClick(DialogInterface dialog, int which) {
-            MapboxEventManager.getMapboxEventManager().setTelemetryEnabled(false);
-            dialog.cancel();
-          }
-        });
-
-        builder.show();
-        return;
-      }
-      String url = context.getResources().getStringArray(R.array.mapbox_attribution_links)[which];
-      if (which == ATTRIBUTION_INDEX_IMPROVE_THIS_MAP) {
-        CameraPosition cameraPosition = transform.getCameraPosition();
-        if (cameraPosition != null) {
-          url = String.format(url, cameraPosition.target.getLongitude(),
-            cameraPosition.target.getLatitude(), (int) cameraPosition.zoom);
-        }
-      }
-      Intent intent = new Intent(Intent.ACTION_VIEW);
-      intent.setData(Uri.parse(url));
-      context.startActivity(intent);
-    }
   }
 
   /**
@@ -843,7 +784,7 @@ public class MapView extends FrameLayout {
   public static final int DID_FINISH_RENDERING_FRAME = 9;
 
   /**
-   * This event is triggered when the map finished rendeirng the frame fully.
+   * This event is triggered when the map finished rendering the frame fully.
    * <p>
    * Register to {@link MapChange} events with {@link MapView#addOnMapChangedListener(OnMapChangedListener)}.
    * </p>
@@ -898,7 +839,7 @@ public class MapView extends FrameLayout {
   public static final int DID_FINISH_LOADING_STYLE = 14;
 
   /**
-   * This {@link MapChange} is triggered when a source attribution changes.
+   * This {@link MapChange} is triggered when a source changes.
    * <p>
    * Register to {@link MapChange} events with {@link MapView#addOnMapChangedListener(OnMapChangedListener)}.
    * </p>
@@ -939,44 +880,182 @@ public class MapView extends FrameLayout {
     void onMapChanged(@MapChange int change);
   }
 
+  private static class MapViewLayoutListener implements ViewTreeObserver.OnGlobalLayoutListener {
+
+    private WeakReference<MapView> mapViewWeakReference;
+    private MapboxMapOptions options;
+
+    MapViewLayoutListener(MapView mapView, MapboxMapOptions options) {
+      this.mapViewWeakReference = new WeakReference<>(mapView);
+      this.options = options;
+    }
+
+    @Override
+    public void onGlobalLayout() {
+      MapView mapView = mapViewWeakReference.get();
+      if (mapView != null) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN) {
+          mapView.getViewTreeObserver().removeOnGlobalLayoutListener(this);
+        } else {
+          mapView.getViewTreeObserver().removeGlobalOnLayoutListener(this);
+        }
+        mapView.initialiseDrawingSurface(options);
+      }
+    }
+  }
+
   private class FocalPointInvalidator implements FocalPointChangeListener {
+
+    private final List<FocalPointChangeListener> focalPointChangeListeners = new ArrayList<>();
+
+    void addListener(FocalPointChangeListener focalPointChangeListener) {
+      focalPointChangeListeners.add(focalPointChangeListener);
+    }
 
     @Override
     public void onFocalPointChanged(PointF pointF) {
       mapGestureDetector.setFocalPoint(pointF);
+      for (FocalPointChangeListener focalPointChangeListener : focalPointChangeListeners) {
+        focalPointChangeListener.onFocalPointChanged(pointF);
+      }
     }
   }
 
   private class RegisterTouchListener implements MapboxMap.OnRegisterTouchListener {
 
     @Override
-    public void onRegisterMapClickListener(MapboxMap.OnMapClickListener listener) {
+    public void onSetMapClickListener(MapboxMap.OnMapClickListener listener) {
       mapGestureDetector.setOnMapClickListener(listener);
     }
 
     @Override
-    public void onRegisterMapLongClickListener(MapboxMap.OnMapLongClickListener listener) {
+    public void onAddMapClickListener(MapboxMap.OnMapClickListener listener) {
+      mapGestureDetector.addOnMapClickListener(listener);
+    }
+
+    @Override
+    public void onRemoveMapClickListener(MapboxMap.OnMapClickListener listener) {
+      mapGestureDetector.removeOnMapClickListener(listener);
+    }
+
+    @Override
+    public void onSetMapLongClickListener(MapboxMap.OnMapLongClickListener listener) {
       mapGestureDetector.setOnMapLongClickListener(listener);
     }
 
     @Override
-    public void onRegisterScrollListener(MapboxMap.OnScrollListener listener) {
+    public void onAddMapLongClickListener(MapboxMap.OnMapLongClickListener listener) {
+      mapGestureDetector.addOnMapLongClickListener(listener);
+    }
+
+    @Override
+    public void onRemoveMapLongClickListener(MapboxMap.OnMapLongClickListener listener) {
+      mapGestureDetector.removeOnMapLongClickListener(listener);
+    }
+
+    @Override
+    public void onSetScrollListener(MapboxMap.OnScrollListener listener) {
       mapGestureDetector.setOnScrollListener(listener);
     }
 
     @Override
-    public void onRegisterFlingListener(MapboxMap.OnFlingListener listener) {
+    public void onAddScrollListener(MapboxMap.OnScrollListener listener) {
+      mapGestureDetector.addOnScrollListener(listener);
+    }
+
+    @Override
+    public void onRemoveScrollListener(MapboxMap.OnScrollListener listener) {
+      mapGestureDetector.removeOnScrollListener(listener);
+    }
+
+    @Override
+    public void onSetFlingListener(MapboxMap.OnFlingListener listener) {
       mapGestureDetector.setOnFlingListener(listener);
+    }
+
+    @Override
+    public void onAddFlingListener(MapboxMap.OnFlingListener listener) {
+      mapGestureDetector.addOnFlingListener(listener);
+    }
+
+    @Override
+    public void onRemoveFlingListener(MapboxMap.OnFlingListener listener) {
+      mapGestureDetector.removeOnFlingListener(listener);
+    }
+  }
+
+  private static class MapZoomControllerListener implements ZoomButtonsController.OnZoomListener {
+
+    private final MapGestureDetector mapGestureDetector;
+    private final UiSettings uiSettings;
+    private final Transform transform;
+    private final CameraChangeDispatcher cameraChangeDispatcher;
+    private final float mapWidth;
+    private final float mapHeight;
+
+    MapZoomControllerListener(MapGestureDetector detector, UiSettings uiSettings, Transform transform,
+                              CameraChangeDispatcher dispatcher, float mapWidth, float mapHeight) {
+      this.mapGestureDetector = detector;
+      this.uiSettings = uiSettings;
+      this.transform = transform;
+      this.cameraChangeDispatcher = dispatcher;
+      this.mapWidth = mapWidth;
+      this.mapHeight = mapHeight;
+    }
+
+    // Not used
+    @Override
+    public void onVisibilityChanged(boolean visible) {
+      // Ignore
+    }
+
+    // Called when user pushes a zoom button on the ZoomButtonController
+    @Override
+    public void onZoom(boolean zoomIn) {
+      if (uiSettings.isZoomGesturesEnabled()) {
+        cameraChangeDispatcher.onCameraMoveStarted(CameraChangeDispatcher.REASON_API_ANIMATION);
+        onZoom(zoomIn, mapGestureDetector.getFocalPoint());
+      }
+    }
+
+    private void onZoom(boolean zoomIn, @Nullable PointF focalPoint) {
+      if (focalPoint != null) {
+        transform.zoom(zoomIn, focalPoint);
+      } else {
+        PointF centerPoint = new PointF(mapWidth / 2, mapHeight / 2);
+        transform.zoom(zoomIn, centerPoint);
+      }
+    }
+  }
+
+  private class CameraZoomInvalidator implements TrackingSettings.CameraZoomInvalidator {
+
+    @Override
+    public void zoomTo(double zoomLevel) {
+      Transform transform = mapboxMap.getTransform();
+      double currentZoomLevel = transform.getCameraPosition().zoom;
+      if (currentZoomLevel < zoomLevel) {
+        setZoom(zoomLevel, mapGestureDetector.getFocalPoint(), transform);
+      }
+    }
+
+    private void setZoom(double zoomLevel, @Nullable PointF focalPoint, @NonNull Transform transform) {
+      if (focalPoint != null) {
+        transform.setZoom(zoomLevel, focalPoint);
+      } else {
+        PointF centerPoint = new PointF(getMeasuredWidth() / 2, getMeasuredHeight() / 2);
+        transform.setZoom(zoomLevel, centerPoint);
+      }
     }
   }
 
   private static class MapCallback implements OnMapChangedListener {
 
-    private final MapboxMap mapboxMap;
+    private MapboxMap mapboxMap;
     private final List<OnMapReadyCallback> onMapReadyCallbackList = new ArrayList<>();
     private boolean initialLoad = true;
 
-    MapCallback(MapboxMap mapboxMap) {
+    void attachMapboxMap(MapboxMap mapboxMap) {
       this.mapboxMap = mapboxMap;
     }
 
@@ -987,8 +1066,10 @@ public class MapView extends FrameLayout {
         mapboxMap.onPreMapReady();
         onMapReady();
         mapboxMap.onPostMapReady();
+      } else if (change == DID_FINISH_RENDERING_FRAME || change == DID_FINISH_RENDERING_FRAME_FULLY_RENDERED) {
+        mapboxMap.onUpdateFullyRendered();
       } else if (change == REGION_IS_CHANGING || change == REGION_DID_CHANGE || change == DID_FINISH_LOADING_MAP) {
-        mapboxMap.onUpdate();
+        mapboxMap.onUpdateRegionChange();
       }
     }
 
@@ -1010,6 +1091,34 @@ public class MapView extends FrameLayout {
 
     void addOnMapReadyCallback(OnMapReadyCallback callback) {
       onMapReadyCallbackList.add(callback);
+    }
+
+    void clearOnMapReadyCallbacks() {
+      onMapReadyCallbackList.clear();
+    }
+  }
+
+  /**
+   * Click event hook for providing a custom attribution dialog manager.
+   */
+  private static class AttributionClickListener implements OnClickListener {
+
+    private final AttributionDialogManager defaultDialogManager;
+    private UiSettings uiSettings;
+
+    private AttributionClickListener(Context context, MapboxMap mapboxMap) {
+      this.defaultDialogManager = new AttributionDialogManager(context, mapboxMap);
+      this.uiSettings = mapboxMap.getUiSettings();
+    }
+
+    @Override
+    public void onClick(View v) {
+      AttributionDialogManager customDialogManager = uiSettings.getAttributionDialogManager();
+      if (customDialogManager != null) {
+        uiSettings.getAttributionDialogManager().onClick(v);
+      } else {
+        defaultDialogManager.onClick(v);
+      }
     }
   }
 }

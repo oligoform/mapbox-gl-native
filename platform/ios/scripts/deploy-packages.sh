@@ -9,7 +9,7 @@ set -u
 #     GITHUB_RELEASE=true: Upload to github
 #     BINARY_DIRECTORY=build/ios/deploy: Directory in which to save test packages
 
-# environment variables and dependencies: 
+# environment variables and dependencies:
 #     - You must run "mbx auth ..." before running
 #     - Set GITHUB_TOKEN to a GitHub API access token in your environment to use GITHUB_RELEASE
 #     - "wget" is required for downloading the zip files from s3
@@ -20,21 +20,21 @@ function finish { >&2 echo -en "\033[0m"; }
 trap finish EXIT
 
 buildPackageStyle() {
-    local package=$1 style=""     
+    local package=$1 style=""
     if [[ ${#} -eq 2 ]]; then
         style="$2"
-    fi            
+    fi
     step "Building: make ${package} ${style}"
     make ${package}
     step "Publishing ${package} with ${style}"
     local file_name=""
-    if [ -z ${style} ] 
+    if [ -z ${style} ]
     then
         ./platform/ios/scripts/publish.sh "${PUBLISH_VERSION}"
-        file_name=mapbox-ios-sdk-${PUBLISH_VERSION}.zip        
+        file_name=mapbox-ios-sdk-${PUBLISH_VERSION}.zip
     else
         ./platform/ios/scripts/publish.sh "${PUBLISH_VERSION}" ${style}
-        file_name=mapbox-ios-sdk-${PUBLISH_VERSION}-${style}.zip        
+        file_name=mapbox-ios-sdk-${PUBLISH_VERSION}-${style}.zip
     fi
     step "Downloading ${file_name} from s3 to ${BINARY_DIRECTORY}"
     wget -O ${BINARY_DIRECTORY}/${file_name} http://mapbox.s3.amazonaws.com/mapbox-gl-native/ios/builds/${file_name}
@@ -44,7 +44,7 @@ buildPackageStyle() {
             --tag "ios-v${PUBLISH_VERSION}" \
             --name ${file_name} \
             --file "${BINARY_DIRECTORY}/${file_name}" > /dev/null
-    fi        
+    fi
 }
 
 export TRAVIS_REPO_SLUG=mapbox-gl-native
@@ -58,17 +58,17 @@ BINARY_DIRECTORY=${BINARY_DIRECTORY:-build/ios/deploy}
 GITHUB_RELEASE=${GITHUB_RELEASE:-true}
 PUBLISH_PRE_FLAG=''
 
+if [[ -z `which github-release` ]]; then
+    step "Installing github-release…"
+    brew install github-release
+    if [ -z `which github-release` ]; then
+        echo "Unable to install github-release. See: https://github.com/aktau/github-release"
+        exit 1
+    fi
+fi
+
 if [[ ${GITHUB_RELEASE} = "true" ]]; then
     GITHUB_RELEASE=true # Assign bool, not just a string
-
-    if [[ -z `which github-release` ]]; then
-        step "Installing github-release…"
-        brew install github-release
-        if [ -z `which github-release` ]; then
-            echo "Unable to install github-release. See: https://github.com/aktau/github-release"
-            exit 1
-        fi
-    fi
 fi
 
 if [[ -z ${VERSION_TAG} ]]; then
@@ -83,7 +83,7 @@ if [[ $( echo ${VERSION_TAG} | grep --invert-match ios-v ) ]]; then
     exit 1
 fi
 
-if [[ $( wget --spider -O- https://api.github.com/repos/${GITHUB_USER}/${GITHUB_REPO}/releases/tags/${VERSION_TAG} 2>&1 | grep -c "404 Not Found" ) == 0 ]]; then
+if github-release info --tag ${VERSION_TAG} | grep --quiet "draft: ✗"; then
     echo "Error: ${VERSION_TAG} has already been published on GitHub"
     echo "See: https://github.com/${GITHUB_USER}/${GITHUB_REPO}/releases/tag/${VERSION_TAG}"
     exit 1
@@ -112,6 +112,5 @@ buildPackageStyle "ipackage" "symbols"
 buildPackageStyle "ipackage-strip"
 buildPackageStyle "iframework" "symbols-dynamic"
 buildPackageStyle "iframework SYMBOLS=NO" "dynamic"
-buildPackageStyle "ifabric" "fabric"
 
 step "Finished deploying ${PUBLISH_VERSION} in $(($SECONDS / 60)) minutes and $(($SECONDS % 60)) seconds"

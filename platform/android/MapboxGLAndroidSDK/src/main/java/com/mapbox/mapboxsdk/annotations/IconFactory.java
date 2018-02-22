@@ -1,10 +1,9 @@
 package com.mapbox.mapboxsdk.annotations;
 
+import android.annotation.SuppressLint;
 import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
-import android.graphics.Canvas;
-import android.graphics.Rect;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
@@ -23,7 +22,10 @@ import java.io.IOException;
 import java.io.InputStream;
 
 /**
- * Factory for creating {@link Icon} objects.
+ * Factory for creating Icons from bitmap images.
+ * <p>
+ * icon is used to display bitmaps on top of the map using {@link Marker} and {@link MarkerView}.
+ * </p>
  *
  * @see Icon
  */
@@ -33,23 +35,30 @@ public final class IconFactory {
   public static final Bitmap ICON_MARKERVIEW_BITMAP = Bitmap.createBitmap(1, 1, Bitmap.Config.ALPHA_8);
   public static final String ICON_MARKERVIEW_ID = ICON_ID_PREFIX + "marker_view";
 
-  private Context mContext;
-  private static IconFactory sInstance;
-  private Icon mDefaultMarker;
-  private Icon mDefaultMarkerView;
-  private BitmapFactory.Options mOptions;
+  private Context context;
+  @SuppressLint("StaticFieldLeak")
+  private static IconFactory instance;
+  private Icon defaultMarker;
+  private Icon defaultMarkerView;
+  private BitmapFactory.Options options;
 
-  private int mNextId = 0;
+  private int nextId = 0;
 
+  /**
+   * Get a single instance of IconFactory.
+   *
+   * @param context the context to derive the application context from
+   * @return the single instance of IconFactory
+   */
   public static synchronized IconFactory getInstance(@NonNull Context context) {
-    if (sInstance == null) {
-      sInstance = new IconFactory(context.getApplicationContext());
+    if (instance == null) {
+      instance = new IconFactory(context.getApplicationContext());
     }
-    return sInstance;
+    return instance;
   }
 
   private IconFactory(@NonNull Context context) {
-    mContext = context;
+    this.context = context;
     DisplayMetrics realMetrics = null;
     DisplayMetrics metrics = new DisplayMetrics();
     WindowManager wm = (WindowManager) context.getSystemService(Context.WINDOW_SERVICE);
@@ -60,130 +69,84 @@ public final class IconFactory {
     }
     wm.getDefaultDisplay().getMetrics(metrics);
 
-    mOptions = new BitmapFactory.Options();
-    mOptions.inScaled = true;
-    mOptions.inDensity = DisplayMetrics.DENSITY_DEFAULT;
-    mOptions.inTargetDensity = metrics.densityDpi;
+    options = new BitmapFactory.Options();
+    options.inScaled = true;
+    options.inDensity = DisplayMetrics.DENSITY_DEFAULT;
+    options.inTargetDensity = metrics.densityDpi;
     if (realMetrics != null) {
-      mOptions.inScreenDensity = realMetrics.densityDpi;
+      options.inScreenDensity = realMetrics.densityDpi;
     }
   }
 
   /**
-   * Creates an {@link Icon} from a given Bitmap image.
+   * Creates an icon from a given Bitmap image.
    *
    * @param bitmap image used for creating the Icon.
-   * @return The {@link Icon} using the given Bitmap image.
+   * @return The icon using the given Bitmap image.
    */
   public Icon fromBitmap(@NonNull Bitmap bitmap) {
-    if (mNextId < 0) {
+    if (nextId < 0) {
       throw new TooManyIconsException();
     }
-    String id = ICON_ID_PREFIX + ++mNextId;
+    String id = ICON_ID_PREFIX + ++nextId;
     return new Icon(id, bitmap);
   }
 
   /**
-   * Create an {@link Icon} from a given {@link Drawable}.
-   *
-   * @param drawable A {@link Drawable} object used for creating the {@link Icon}.
-   * @return {@link Icon} with the provided {@link Drawable}.
-   */
-  public Icon fromDrawable(@NonNull Drawable drawable) {
-    int width = drawable.getIntrinsicWidth();
-    int height = drawable.getIntrinsicHeight();
-    return fromDrawable(drawable, width, height);
-  }
-
-  /**
-   * Create an {@link Icon} from a given {@link Drawable}.
-   *
-   * @param drawable A {@link Drawable} object used for creating the {@link Icon}.
-   * @param width    An integer greater then zero defining the {@link Icon} width.
-   * @param height   An integer greater then zero defining the {@link Icon} height.
-   * @return {@link Icon} with the provided {@link Drawable}.
-   */
-  public Icon fromDrawable(@NonNull Drawable drawable, int width, int height) {
-    if ((width < 0) || (height < 0)) {
-      return null;
-    }
-
-    Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
-    Canvas canvas = new Canvas(bitmap);
-    Rect temp = drawable.getBounds();
-    Rect bounds = new Rect(0, 0, width, height);
-    drawable.setBounds(bounds);
-    drawable.draw(canvas);
-    drawable.setBounds(temp);
-    return fromBitmap(bitmap);
-  }
-
-  /**
-   * Create an {@link Icon} using the resource ID of a Bitmap image.
+   * Creates an icon using the resource ID of a Bitmap image.
    *
    * @param resourceId The resource ID of a Bitmap image.
-   * @return The {@link Icon} that was loaded from the asset or {@code null} if failed to load.
+   * @return The icon that was loaded from the asset or {@code null} if failed to load.
    */
   public Icon fromResource(@DrawableRes int resourceId) {
-    Drawable drawable = ContextCompat.getDrawable(mContext, resourceId);
-    Bitmap bitmap;
+    Drawable drawable = ContextCompat.getDrawable(context, resourceId);
     if (drawable instanceof BitmapDrawable) {
       BitmapDrawable bitmapDrawable = (BitmapDrawable) drawable;
-      bitmap = bitmapDrawable.getBitmap();
+      return fromBitmap(bitmapDrawable.getBitmap());
     } else {
-      if (drawable.getIntrinsicWidth() <= 0 || drawable.getIntrinsicHeight() <= 0) {
-        bitmap = Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888);
-      } else {
-        bitmap = Bitmap.createBitmap(drawable.getIntrinsicWidth(), drawable.getIntrinsicHeight(),
-          Bitmap.Config.ARGB_8888);
-      }
-
-      Canvas canvas = new Canvas(bitmap);
-      drawable.setBounds(0, 0, canvas.getWidth(), canvas.getHeight());
-      drawable.draw(canvas);
+      throw new IllegalArgumentException("Failed to decode image. The resource provided must be a Bitmap.");
     }
-    return fromBitmap(bitmap);
   }
 
   /**
-   * Provides an {@link Icon} using the default marker icon used for {@link Marker}.
+   * Provides an icon using the default marker icon used for {@link Marker}.
    *
-   * @return An {@link Icon} with the default {@link Marker} icon.
+   * @return An icon with the default {@link Marker} icon.
    */
   public Icon defaultMarker() {
-    if (mDefaultMarker == null) {
-      mDefaultMarker = fromResource(R.drawable.mapbox_marker_icon_default);
+    if (defaultMarker == null) {
+      defaultMarker = fromResource(R.drawable.mapbox_marker_icon_default);
     }
-    return mDefaultMarker;
+    return defaultMarker;
   }
 
   /**
-   * Provides an {@link Icon} using the default marker icon used for {@link MarkerView}.
+   * Provides an icon using the default marker icon used for {@link MarkerView}.
    *
-   * @return An {@link Icon} with the default {@link MarkerView} icon.
+   * @return An icon with the default {@link MarkerView} icon.
    */
   public Icon defaultMarkerView() {
-    if (mDefaultMarkerView == null) {
-      mDefaultMarkerView = fromResource(R.drawable.mapbox_markerview_icon_default);
+    if (defaultMarkerView == null) {
+      defaultMarkerView = fromResource(R.drawable.mapbox_markerview_icon_default);
     }
-    return mDefaultMarkerView;
+    return defaultMarkerView;
   }
 
   private Icon fromInputStream(@NonNull InputStream is) {
-    Bitmap bitmap = BitmapFactory.decodeStream(is, null, mOptions);
+    Bitmap bitmap = BitmapFactory.decodeStream(is, null, options);
     return fromBitmap(bitmap);
   }
 
   /**
-   * Creates an {@link Icon} using the name of a Bitmap image in the assets directory.
+   * Creates an Icon using the name of a Bitmap image in the assets directory.
    *
    * @param assetName The name of a Bitmap image in the assets directory.
-   * @return The {@link Icon} that was loaded from the asset or {@code null} if failed to load.
+   * @return The Icon that was loaded from the asset or null if failed to load.
    */
   public Icon fromAsset(@NonNull String assetName) {
     InputStream is;
     try {
-      is = mContext.getAssets().open(assetName);
+      is = context.getAssets().open(assetName);
     } catch (IOException ioException) {
       return null;
     }
@@ -191,30 +154,29 @@ public final class IconFactory {
   }
 
   /**
-   * Creates an {@link Icon} using the absolute file path of a Bitmap image.
+   * Creates an Icon using the absolute file path of a Bitmap image.
    *
    * @param absolutePath The absolute path of the Bitmap image.
-   * @return The {@link Icon} that was loaded from the absolute path or {@code null} if failed to
-   * load.
+   * @return The Icon that was loaded from the absolute path or null if failed to load.
    */
   public Icon fromPath(@NonNull String absolutePath) {
-    Bitmap bitmap = BitmapFactory.decodeFile(absolutePath, mOptions);
+    Bitmap bitmap = BitmapFactory.decodeFile(absolutePath, options);
     return fromBitmap(bitmap);
   }
 
   /**
-   * Create an {@link Icon} using the name of a Bitmap image file located in the internal storage.
-   * In particular, this calls {@link Context#openFileInput(String)}.
+   * Create an Icon using the name of a Bitmap image file located in the internal storage.
+   * In particular, this calls Context#openFileInput(String).
    *
    * @param fileName The name of the Bitmap image file.
-   * @return The {@link Icon} that was loaded from the asset or {@code null} if failed to load.
+   * @return The Icon that was loaded from the asset or null if failed to load.
    * @see <a href="https://developer.android.com/guide/topics/data/data-storage.html#filesInternal">
-   *   Using the Internal Storage</a>
+   * Using the Internal Storage</a>
    */
   public Icon fromFile(@NonNull String fileName) {
     FileInputStream is;
     try {
-      is = mContext.openFileInput(fileName);
+      is = context.openFileInput(fileName);
     } catch (FileNotFoundException fileNotFoundException) {
       return null;
     }
@@ -222,14 +184,14 @@ public final class IconFactory {
   }
 
   /**
-   * Create an {@link Icon} using a previously created icon identifier along with a provided
-   * Bitmap.
+   * Create an Icon using a previously created icon identifier along with a provided Bitmap.
    *
-   * @param iconId The {@link Icon} identifier you'd like to recreate.
+   * @param iconId The Icon identifier you'd like to recreate.
    * @param bitmap a Bitmap used to replace the current one.
-   * @return The {@link Icon} using the new Bitmap.
+   * @return The Icon using the new Bitmap.
    */
   public static Icon recreate(@NonNull String iconId, @NonNull Bitmap bitmap) {
     return new Icon(iconId, bitmap);
   }
+
 }

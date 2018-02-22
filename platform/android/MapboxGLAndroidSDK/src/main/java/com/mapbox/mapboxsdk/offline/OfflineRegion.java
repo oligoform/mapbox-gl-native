@@ -4,8 +4,11 @@ import android.os.Handler;
 import android.os.Looper;
 import android.support.annotation.IntDef;
 import android.support.annotation.NonNull;
+import android.support.annotation.Nullable;
 
-import timber.log.Timber;
+import com.mapbox.mapboxsdk.LibraryLoader;
+import com.mapbox.mapboxsdk.Mapbox;
+import com.mapbox.mapboxsdk.storage.FileSource;
 
 import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
@@ -22,28 +25,34 @@ public class OfflineRegion {
   //
 
   static {
-    System.loadLibrary("mapbox-gl");
+    LibraryLoader.load();
   }
 
-  // Parent OfflineManager
-  private OfflineManager offlineManager;
-
   // Members
-  private long mId = 0;
-  private OfflineRegionDefinition mDefinition = null;
+
+  // Holds the pointer to JNI OfflineRegion
+  private long nativePtr;
+
+  // Holds a reference to the FileSource to keep it alive
+  private FileSource fileSource;
+
+  //Region id
+  private long id;
+
+  // delete status
+  private boolean isDeleted;
+
+  private OfflineRegionDefinition definition;
 
   /**
    * Arbitrary binary region metadata. The contents are opaque to the SDK implementation;
    * it just stores and retrieves a byte[]. Check the `OfflineActivity` in the TestApp
    * for a sample implementation that uses JSON to store an offline region name.
    */
-  private byte[] mMetadata = null;
-
-  // Holds the pointer to JNI OfflineRegion
-  private long mOfflineRegionPtr = 0;
+  private byte[] metadata;
 
   // Makes sure callbacks come back to the main thread
-  private Handler handler;
+  private final Handler handler = new Handler(Looper.getMainLooper());
 
   /**
    * A region can have a single observer, which gets notified whenever a change
@@ -91,7 +100,7 @@ public class OfflineRegion {
   }
 
   /**
-   * This callback receives an asynchronous response containing the {@link OfflineRegionStatus}
+   * This callback receives an asynchronous response containing the OfflineRegionStatus
    * of the offline region, or a {@link String} error message otherwise.
    */
   public interface OfflineRegionStatusCallback {
@@ -197,19 +206,22 @@ public class OfflineRegion {
     if (state == STATE_ACTIVE) {
       return true;
     }
-    if (isDeliveringInactiveMessages()) {
-      return true;
-    }
-    return false;
+    return isDeliveringInactiveMessages();
   }
 
-  /*
+  /**
    * Constructor
+   * <p>
+   * For JNI use only, to create a new offline region, use
+   * {@link OfflineManager#createOfflineRegion} instead.
    */
-
-  private OfflineRegion() {
-    // For JNI use only, to create a new offline region, use
-    // OfflineManager.createOfflineRegion() instead.
+  private OfflineRegion(long offlineRegionPtr, FileSource fileSource, long id,
+                        OfflineRegionDefinition definition, byte[] metadata) {
+    this.fileSource = fileSource;
+    this.id = id;
+    this.definition = definition;
+    this.metadata = metadata;
+    initialize(offlineRegionPtr, fileSource);
   }
 
   /*
@@ -217,23 +229,15 @@ public class OfflineRegion {
    */
 
   public long getID() {
-    return mId;
+    return id;
   }
 
   public OfflineRegionDefinition getDefinition() {
-    return mDefinition;
+    return definition;
   }
 
   public byte[] getMetadata() {
-    return mMetadata;
-  }
-
-  private Handler getHandler() {
-    if (handler == null) {
-      handler = new Handler(Looper.getMainLooper());
-    }
-
-    return handler;
+    return metadata;
   }
 
   /**
@@ -241,14 +245,13 @@ public class OfflineRegion {
    *
    * @param observer the observer to be notified
    */
-  public void setObserver(@NonNull final OfflineRegionObserver observer) {
+  public void setObserver(@Nullable final OfflineRegionObserver observer) {
     setOfflineRegionObserver(new OfflineRegionObserver() {
       @Override
       public void onStatusChanged(final OfflineRegionStatus status) {
         if (deliverMessages()) {
-          getHandler().post(new Runnable() {
-            @Override
-            public void run() {
+          handler.post(() -> {
+            if (observer != null) {
               observer.onStatusChanged(status);
             }
           });
@@ -258,9 +261,8 @@ public class OfflineRegion {
       @Override
       public void onError(final OfflineRegionError error) {
         if (deliverMessages()) {
-          getHandler().post(new Runnable() {
-            @Override
-            public void run() {
+          handler.post(() -> {
+            if (observer != null) {
               observer.onError(error);
             }
           });
@@ -270,9 +272,8 @@ public class OfflineRegion {
       @Override
       public void mapboxTileCountLimitExceeded(final long limit) {
         if (deliverMessages()) {
-          getHandler().post(new Runnable() {
-            @Override
-            public void run() {
+          handler.post(() -> {
+            if (observer != null) {
               observer.mapboxTileCountLimitExceeded(limit);
             }
           });
@@ -283,10 +284,19 @@ public class OfflineRegion {
 
   /**
    * Pause or resume downloading of regional resources.
+   * <p>
+   * After a download has been completed, you are required to reset the state of the region to STATE_INACTIVE.
+   * </p>
    *
    * @param state the download state
    */
   public void setDownloadState(@DownloadState int state) {
+    if (state == STATE_ACTIVE) {
+      fileSource.activate();
+    } else {
+      fileSource.deactivate();
+    }
+
     this.state = state;
     setOfflineRegionDownloadState(state);
   }
@@ -299,24 +309,21 @@ public class OfflineRegion {
    * @param callback the callback to invoked.
    */
   public void getStatus(@NonNull final OfflineRegionStatusCallback callback) {
+    FileSource.getInstance(Mapbox.getApplicationContext()).activate();
     getOfflineRegionStatus(new OfflineRegionStatusCallback() {
       @Override
       public void onStatus(final OfflineRegionStatus status) {
-        getHandler().post(new Runnable() {
-          @Override
-          public void run() {
-            callback.onStatus(status);
-          }
+        handler.post(() -> {
+          callback.onStatus(status);
+          FileSource.getInstance(Mapbox.getApplicationContext()).deactivate();
         });
       }
 
       @Override
       public void onError(final String error) {
-        getHandler().post(new Runnable() {
-          @Override
-          public void run() {
-            callback.onError(error);
-          }
+        handler.post(() -> {
+          callback.onError(error);
+          FileSource.getInstance(Mapbox.getApplicationContext()).deactivate();
         });
       }
     });
@@ -340,28 +347,29 @@ public class OfflineRegion {
    * @param callback the callback to be invoked
    */
   public void delete(@NonNull final OfflineRegionDeleteCallback callback) {
-    deleteOfflineRegion(new OfflineRegionDeleteCallback() {
-      @Override
-      public void onDelete() {
-        getHandler().post(new Runnable() {
-          @Override
-          public void run() {
+    if (!isDeleted) {
+      isDeleted = true;
+      FileSource.getInstance(Mapbox.getApplicationContext()).activate();
+      deleteOfflineRegion(new OfflineRegionDeleteCallback() {
+        @Override
+        public void onDelete() {
+          handler.post((Runnable) () -> {
             callback.onDelete();
+            FileSource.getInstance(Mapbox.getApplicationContext()).deactivate();
             OfflineRegion.this.finalize();
-          }
-        });
-      }
+          });
+        }
 
-      @Override
-      public void onError(final String error) {
-        getHandler().post(new Runnable() {
-          @Override
-          public void run() {
+        @Override
+        public void onError(final String error) {
+          handler.post(() -> {
+            isDeleted = false;
+            FileSource.getInstance(Mapbox.getApplicationContext()).deactivate();
             callback.onError(error);
-          }
-        });
-      }
-    });
+          });
+        }
+      });
+    }
   }
 
   /**
@@ -370,64 +378,39 @@ public class OfflineRegion {
    * When the operation is complete or encounters an error, the given callback will be
    * executed on the main thread.
    * </p>
-   * <p>
-   * After you call this method, you may not call any additional methods on this object.
-   * </p>
    *
+   * @param bytes    the metadata in bytes
    * @param callback the callback to be invoked
    */
   public void updateMetadata(@NonNull final byte[] bytes, @NonNull final OfflineRegionUpdateMetadataCallback callback) {
     updateOfflineRegionMetadata(bytes, new OfflineRegionUpdateMetadataCallback() {
       @Override
       public void onUpdate(final byte[] metadata) {
-        getHandler().post(new Runnable() {
-          @Override
-          public void run() {
-            mMetadata = metadata;
-            callback.onUpdate(metadata);
-          }
+        handler.post(() -> {
+          OfflineRegion.this.metadata = metadata;
+          callback.onUpdate(metadata);
         });
       }
 
       @Override
       public void onError(final String error) {
-        getHandler().post(new Runnable() {
-          @Override
-          public void run() {
-            callback.onError(error);
-          }
-        });
+        handler.post(() -> callback.onError(error));
       }
     });
   }
 
+  private native void initialize(long offlineRegionPtr, FileSource fileSource);
+
   @Override
-  protected void finalize() {
-    try {
-      super.finalize();
-      destroyOfflineRegion();
-    } catch (Throwable throwable) {
-      Timber.e("Failed to finalize OfflineRegion: " + throwable.getMessage());
-    }
-  }
+  protected native void finalize();
 
-  /*
-   * Native methods
-   */
+  private native void setOfflineRegionObserver(OfflineRegionObserver callback);
 
-  private native void destroyOfflineRegion();
+  private native void setOfflineRegionDownloadState(@DownloadState int offlineRegionDownloadState);
 
-  private native void setOfflineRegionObserver(
-    OfflineRegionObserver observerCallback);
+  private native void getOfflineRegionStatus(OfflineRegionStatusCallback callback);
 
-  private native void setOfflineRegionDownloadState(
-    @DownloadState int offlineRegionDownloadState);
-
-  private native void getOfflineRegionStatus(
-    OfflineRegionStatusCallback statusCallback);
-
-  private native void deleteOfflineRegion(
-    OfflineRegionDeleteCallback deleteCallback);
+  private native void deleteOfflineRegion(OfflineRegionDeleteCallback callback);
 
   private native void updateOfflineRegionMetadata(byte[] metadata, OfflineRegionUpdateMetadataCallback callback);
 

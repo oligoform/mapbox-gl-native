@@ -6,7 +6,7 @@ set -u
 
 if [ -z `which jazzy` ]; then
     echo "Installing jazzy…"
-    gem install jazzy
+    gem install jazzy --no-rdoc --no-ri
     if [ -z `which jazzy` ]; then
         echo "Unable to install jazzy. See https://github.com/mapbox/mapbox-gl-native/blob/master/platform/ios/INSTALL.md"
         exit 1
@@ -30,7 +30,8 @@ sed -n -e '/^## /{' -e ':a' -e 'n' -e '/^## /q' -e 'p' -e 'ba' -e '}' platform/i
 rm -rf ${OUTPUT}
 mkdir -p ${OUTPUT}
 
-cp platform/ios/screenshot.png "${OUTPUT}"
+cp -r platform/darwin/docs/img "${OUTPUT}"
+cp -r platform/ios/docs/img "${OUTPUT}"
 
 DEFAULT_THEME="platform/darwin/docs/theme"
 THEME=${JAZZY_THEME:-$DEFAULT_THEME}
@@ -41,7 +42,7 @@ jazzy \
     --github-file-prefix https://github.com/mapbox/mapbox-gl-native/tree/${BRANCH} \
     --module-version ${SHORT_VERSION} \
     --readme ${README} \
-    --documentation="platform/ios/docs/Info.plist Keys.md" \
+    --documentation="platform/{darwin,ios}/docs/guides/*.md" \
     --root-url https://www.mapbox.com/ios-sdk/api/${RELEASE_VERSION}/ \
     --theme ${THEME} \
     --output ${OUTPUT}

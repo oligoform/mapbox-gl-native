@@ -24,9 +24,9 @@ function publish_binary_size {
     local DATE_END=$(date -u +${DATE_FORMAT})
 
     if [ `uname -s` = 'Darwin' ]; then # BSD date
-        local DATE_BEGIN=$(date -jf "${DATE_FORMAT}" -v-30d "${DATE_END}" +"${DATE_FORMAT}")
+        local DATE_BEGIN=$(date -jf "${DATE_FORMAT}" -v-60d "${DATE_END}" +"${DATE_FORMAT}")
     else # GNU date
-        local DATE_BEGIN=$(date --date="${DATE_END} - 30 days" +"${DATE_FORMAT}")
+        local DATE_BEGIN=$(date --date="${DATE_END} - 60 days" +"${DATE_FORMAT}")
     fi
 
     # Download the metrics, gzip, and upload to S3.
@@ -56,7 +56,6 @@ else
     # Upload all dimensions that we are tracking
     publish_binary_size "Platform=iOS,Arch=armv7"
     publish_binary_size "Platform=iOS,Arch=arm64"
-    publish_binary_size "Platform=iOS,Arch=i386"
     publish_binary_size "Platform=iOS,Arch=x86_64"
     publish_binary_size "Platform=iOS,Arch=Dynamic"
 

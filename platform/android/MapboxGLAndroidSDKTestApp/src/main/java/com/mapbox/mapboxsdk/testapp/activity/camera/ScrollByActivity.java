@@ -9,7 +9,6 @@ import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.Toolbar;
 import android.view.MenuItem;
-import android.view.View;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
@@ -20,6 +19,9 @@ import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.maps.UiSettings;
 import com.mapbox.mapboxsdk.testapp.R;
 
+/**
+ * Test activity showcasing using the scrollBy Camera API by moving x,y pixels above Grenada, Spain.
+ */
 public class ScrollByActivity extends AppCompatActivity implements OnMapReadyCallback {
 
   public static final int MULTIPLIER_PER_PIXEL = 50;
@@ -66,15 +68,10 @@ public class ScrollByActivity extends AppCompatActivity implements OnMapReadyCal
 
     FloatingActionButton fab = (FloatingActionButton) findViewById(R.id.fab);
     fab.setColorFilter(ContextCompat.getColor(ScrollByActivity.this, R.color.primary));
-    fab.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View view) {
-        mapboxMap.easeCamera(CameraUpdateFactory.scrollBy(
-          seekBarX.getProgress() * MULTIPLIER_PER_PIXEL,
-          seekBarY.getProgress() * MULTIPLIER_PER_PIXEL)
-        );
-      }
-    });
+    fab.setOnClickListener(view -> mapboxMap.easeCamera(CameraUpdateFactory.scrollBy(
+      seekBarX.getProgress() * MULTIPLIER_PER_PIXEL,
+      seekBarY.getProgress() * MULTIPLIER_PER_PIXEL)
+    ));
   }
 
   @Override

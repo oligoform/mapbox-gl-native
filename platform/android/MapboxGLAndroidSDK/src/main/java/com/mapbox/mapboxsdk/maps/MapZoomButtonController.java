@@ -1,7 +1,6 @@
 package com.mapbox.mapboxsdk.maps;
 
 import android.support.annotation.NonNull;
-import android.view.View;
 import android.widget.ZoomButtonsController;
 
 import com.mapbox.mapboxsdk.constants.MapboxConstants;
@@ -12,48 +11,25 @@ import com.mapbox.mapboxsdk.constants.MapboxConstants;
  * Allows single touch only devices to zoom in and out.
  * </p>
  */
-final class MapZoomButtonController extends ZoomButtonsController {
+final class MapZoomButtonController {
 
   private UiSettings uiSettings;
+  private ZoomButtonsController zoomButtonsController;
 
-  MapZoomButtonController(@NonNull View ownerView, @NonNull UiSettings uiSettings, @NonNull Transform transform) {
-    super(ownerView);
+  MapZoomButtonController(@NonNull ZoomButtonsController zoomButtonsController) {
+    this.zoomButtonsController = zoomButtonsController;
+    this.zoomButtonsController.setZoomSpeed(MapboxConstants.ANIMATION_DURATION);
+  }
+
+  void bind(UiSettings uiSettings, ZoomButtonsController.OnZoomListener onZoomListener) {
     this.uiSettings = uiSettings;
-    setZoomSpeed(MapboxConstants.ANIMATION_DURATION);
-    setOnZoomListener(new OnZoomListener(uiSettings, transform));
+    zoomButtonsController.setOnZoomListener(onZoomListener);
   }
 
-  @Override
-  public void setVisible(boolean visible) {
-    if (uiSettings.isZoomControlsEnabled()) {
-      super.setVisible(visible);
+  void setVisible(boolean visible) {
+    if (uiSettings != null && !uiSettings.isZoomControlsEnabled()) {
+      return;
     }
-  }
-
-  // Zoom controls allow single touch only devices to zoom in and out
-  private static class OnZoomListener implements ZoomButtonsController.OnZoomListener {
-
-    private final UiSettings uiSettings;
-    private final Transform transform;
-
-    OnZoomListener(UiSettings uiSettings, Transform transform) {
-      this.uiSettings = uiSettings;
-      this.transform = transform;
-    }
-
-    // Not used
-    @Override
-    public void onVisibilityChanged(boolean visible) {
-      // Ignore
-    }
-
-    // Called when user pushes a zoom button
-    @Override
-    public void onZoom(boolean zoomIn) {
-      if (!uiSettings.isZoomGesturesEnabled()) {
-        return;
-      }
-      transform.zoom(zoomIn);
-    }
+    zoomButtonsController.setVisible(visible);
   }
 }

@@ -1,19 +1,12 @@
 #include "run_loop_impl.hpp"
 
-#include <mbgl/util/thread_local.hpp>
+#include <mbgl/actor/scheduler.hpp>
 
 #include <QCoreApplication>
 
 #include <cassert>
 #include <functional>
 #include <utility>
-
-namespace {
-
-using namespace mbgl::util;
-static ThreadLocal<RunLoop>& current = *new ThreadLocal<RunLoop>;
-
-}
 
 namespace mbgl {
 namespace util {
@@ -27,26 +20,11 @@ void RunLoop::Impl::onWriteEvent(int fd) {
 }
 
 RunLoop* RunLoop::Get() {
-    return current.get();
+    assert(static_cast<RunLoop*>(Scheduler::GetCurrent()));
+    return static_cast<RunLoop*>(Scheduler::GetCurrent());
 }
 
 RunLoop::RunLoop(Type type) : impl(std::make_unique<Impl>()) {
-    // XXX: We should probably throw an runtime exception
-    // here instead of creating a QCoreApplication which is
-    // way too intrusive. This is a hack mostly for the unit
-    // tests to work, as you always need a QCoreApplication
-    // prior to run a Qt app.
-    if (!QCoreApplication::instance()) {
-        static const char* argv[] = { "mbgl" };
-        static int argc = 1;
-
-        // We need to keep this around because it would otherwise crash
-        // on Qt4 due to a bug on QNetworkConfigurationManager when recreating
-        // a QCoreApplication: https://bugreports.qt.io/browse/QTBUG-36897
-        static auto* app = new QCoreApplication(argc, const_cast<char**>(argv));
-        Q_UNUSED(app);
-    }
-
     switch (type) {
     case Type::New:
         impl->loop = std::make_unique<QEventLoop>();
@@ -58,14 +36,14 @@ RunLoop::RunLoop(Type type) : impl(std::make_unique<Impl>()) {
 
     impl->type = type;
 
-    current.set(this);
+    Scheduler::SetCurrent(this);
     impl->async = std::make_unique<AsyncTask>(std::bind(&RunLoop::process, this));
 }
 
 RunLoop::~RunLoop() {
     MBGL_VERIFY_THREAD(tid);
 
-    current.set(nullptr);
+    Scheduler::SetCurrent(nullptr);
 }
 
 LOOP_HANDLE RunLoop::getLoopHandle() {
@@ -74,12 +52,12 @@ LOOP_HANDLE RunLoop::getLoopHandle() {
     return nullptr;
 }
 
-void RunLoop::push(std::shared_ptr<WorkTask> task) {
-    withMutex([&] { queue.push(task); });
+void RunLoop::wake() {
     impl->async->send();
 }
 
 void RunLoop::run() {
+    assert(QCoreApplication::instance());
     MBGL_VERIFY_THREAD(tid);
 
     if (impl->type == Type::Default) {
@@ -90,6 +68,7 @@ void RunLoop::run() {
 }
 
 void RunLoop::stop() {
+    assert(QCoreApplication::instance());
     invoke([&] {
         if (impl->type == Type::Default) {
             QCoreApplication::instance()->exit();
@@ -100,6 +79,7 @@ void RunLoop::stop() {
 }
 
 void RunLoop::runOnce() {
+    assert(QCoreApplication::instance());
     MBGL_VERIFY_THREAD(tid);
 
     if (impl->type == Type::Default) {

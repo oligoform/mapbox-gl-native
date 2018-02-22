@@ -1,18 +1,24 @@
 #pragma once
 
 #include "qmapboxgl.hpp"
+#include "qmapboxgl_map_observer.hpp"
+#include "qmapboxgl_map_renderer.hpp"
 
+#include <mbgl/actor/actor.hpp>
 #include <mbgl/map/map.hpp>
-#include <mbgl/map/backend.hpp>
-#include <mbgl/map/view.hpp>
-#include <mbgl/util/default_thread_pool.hpp>
+#include <mbgl/renderer/renderer_frontend.hpp>
 #include <mbgl/storage/default_file_source.hpp>
+#include <mbgl/storage/resource_transform.hpp>
+#include <mbgl/util/default_thread_pool.hpp>
 #include <mbgl/util/geo.hpp>
 
 #include <QObject>
 #include <QSize>
 
-class QMapboxGLPrivate : public QObject, public mbgl::View, public mbgl::Backend
+#include <atomic>
+#include <memory>
+
+class QMapboxGLPrivate : public QObject, public mbgl::RendererFrontend
 {
     Q_OBJECT
 
@@ -20,36 +26,40 @@ public:
     explicit QMapboxGLPrivate(QMapboxGL *, const QMapboxGLSettings &, const QSize &size, qreal pixelRatio);
     virtual ~QMapboxGLPrivate();
 
-    // mbgl::View implementation.
-    float getPixelRatio() const;
-    void bind() final;
-    std::array<uint16_t, 2> getSize() const;
-    std::array<uint16_t, 2> getFramebufferSize() const;
+    // mbgl::RendererFrontend implementation.
+    void reset() final {}
+    void setObserver(mbgl::RendererObserver &) final;
+    void update(std::shared_ptr<mbgl::UpdateParameters>) final;
 
-    void activate() final {}
-    void deactivate() final {}
-    void invalidate() final;
-    void notifyMapChange(mbgl::MapChange) final;
+    // These need to be called on the same thread.
+    void createRenderer();
+    void destroyRenderer();
+    void render();
+    void setFramebufferObject(quint32 fbo, const QSize& size);
 
     mbgl::EdgeInsets margins;
-    QSize size { 0, 0 };
-    QSize fbSize { 0, 0 };
-
-    QMapboxGL *q_ptr { nullptr };
-
-    std::unique_ptr<mbgl::DefaultFileSource> fileSourceObj;
-    mbgl::ThreadPool threadPool;
     std::unique_ptr<mbgl::Map> mapObj;
 
-    bool dirty { false };
-
-    QOpenGLFramebufferObject *fbo { nullptr };
-
 public slots:
-    void connectionEstablished();
+    void requestRendering();
 
 signals:
     void needsRendering();
-    void mapChanged(QMapboxGL::MapChange);
-    void copyrightsChanged(const QString &copyrightsHtml);
+
+private:
+    Q_DISABLE_COPY(QMapboxGLPrivate)
+
+    std::recursive_mutex m_mapRendererMutex;
+    std::shared_ptr<mbgl::RendererObserver> m_rendererObserver;
+
+    std::unique_ptr<QMapboxGLMapObserver> m_mapObserver;
+    std::shared_ptr<mbgl::DefaultFileSource> m_fileSourceObj;
+    std::shared_ptr<mbgl::ThreadPool> m_threadPool;
+    std::unique_ptr<QMapboxGLMapRenderer> m_mapRenderer;
+    std::unique_ptr<mbgl::Actor<mbgl::ResourceTransform>> m_resourceTransform;
+
+    QMapboxGLSettings::GLContextMode m_mode;
+    qreal m_pixelRatio;
+
+    std::atomic_flag m_renderQueued = ATOMIC_FLAG_INIT;
 };

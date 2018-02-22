@@ -5,25 +5,23 @@ import android.graphics.Color;
 import android.graphics.PointF;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.view.Menu;
 import android.view.MenuItem;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
+import com.mapbox.geojson.Feature;
+import com.mapbox.geojson.FeatureCollection;
+import com.mapbox.geojson.Point;
 import com.mapbox.mapboxsdk.camera.CameraUpdateFactory;
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.style.layers.SymbolLayer;
 import com.mapbox.mapboxsdk.style.sources.GeoJsonSource;
 import com.mapbox.mapboxsdk.testapp.R;
-import com.mapbox.services.commons.geojson.Feature;
-import com.mapbox.services.commons.geojson.FeatureCollection;
-import com.mapbox.services.commons.geojson.Point;
+
 
 import java.util.Arrays;
 import java.util.List;
@@ -37,7 +35,7 @@ import static com.mapbox.mapboxsdk.style.layers.PropertyFactory.textFont;
 import static com.mapbox.mapboxsdk.style.layers.PropertyFactory.textSize;
 
 /**
- * Example to test runtime manipulation of symbol layers
+ * Test activity showcasing runtime manipulation of symbol layers.
  */
 public class SymbolLayerActivity extends AppCompatActivity implements MapboxMap.OnMapClickListener {
 
@@ -51,66 +49,54 @@ public class SymbolLayerActivity extends AppCompatActivity implements MapboxMap.
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_symbollayer);
 
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
-    }
-
     mapView = (MapView) findViewById(R.id.mapView);
     mapView.onCreate(savedInstanceState);
-    mapView.getMapAsync(new OnMapReadyCallback() {
-      @Override
-      public void onMapReady(@NonNull final MapboxMap map) {
-        mapboxMap = map;
+    mapView.getMapAsync(map -> {
+      mapboxMap = map;
 
-        //Add a image for the makers
-        mapboxMap.addImage(
-          "my-marker-image",
-          BitmapFactory.decodeResource(SymbolLayerActivity.this.getResources(),
-            R.drawable.mapbox_marker_icon_default)
-        );
+      // Add a image for the makers
+      mapboxMap.addImage(
+        "my-marker-image",
+        BitmapFactory.decodeResource(SymbolLayerActivity.this.getResources(),
+          R.drawable.mapbox_marker_icon_default)
+      );
 
-        //Add a source
-        FeatureCollection markers = FeatureCollection.fromFeatures(new Feature[] {
-          Feature.fromGeometry(Point.fromCoordinates(new double[] {4.91638, 52.35673}), featureProperties("Marker 1")),
-          Feature.fromGeometry(Point.fromCoordinates(new double[] {4.91638, 52.34673}), featureProperties("Marker 2"))
-        });
-        mapboxMap.addSource(new GeoJsonSource(MARKER_SOURCE, markers));
+      // Add a source
+      FeatureCollection markers = FeatureCollection.fromFeatures(new Feature[] {
+        Feature.fromGeometry(Point.fromLngLat(4.91638, 52.35673), featureProperties("Marker 1")),
+        Feature.fromGeometry(Point.fromLngLat(4.91638, 52.34673), featureProperties("Marker 2"))
+      });
+      mapboxMap.addSource(new GeoJsonSource(MARKER_SOURCE, markers));
 
-        //Add the symbol-layer
-        mapboxMap.addLayer(
-          new SymbolLayer(MARKER_LAYER, MARKER_SOURCE)
-            .withProperties(
-              iconImage("my-marker-image"),
-              iconAllowOverlap(true),
-              textField("{title}"),
-              textColor(Color.RED),
-              textSize(10f)
-            )
-        );
+      // Add the symbol-layer
+      mapboxMap.addLayer(
+        new SymbolLayer(MARKER_LAYER, MARKER_SOURCE)
+          .withProperties(
+            iconImage("my-marker-image"),
+            iconAllowOverlap(true),
+            textField("{title}"),
+            textColor(Color.RED),
+            textSize(10f)
+          )
+      );
 
-        //Show
-        mapboxMap.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(52.35273, 4.91638), 14));
+      // Show
+      mapboxMap.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(52.35273, 4.91638), 14));
 
-        //Set a click-listener so we can manipulate the map
-        mapboxMap.setOnMapClickListener(SymbolLayerActivity.this);
-      }
+      // Set a click-listener so we can manipulate the map
+      mapboxMap.setOnMapClickListener(SymbolLayerActivity.this);
     });
   }
 
   @Override
   public void onMapClick(@NonNull LatLng point) {
-    //Query which features are clicked
+    // Query which features are clicked
     PointF screenLoc = mapboxMap.getProjection().toScreenLocation(point);
     List<Feature> features = mapboxMap.queryRenderedFeatures(screenLoc, MARKER_LAYER);
 
     SymbolLayer layer = mapboxMap.getLayerAs(MARKER_LAYER);
     if (features.size() == 0) {
-      //Reset
+      // Reset
       layer.setProperties(iconSize(1f));
     } else {
       layer.setProperties(iconSize(3f));
@@ -195,9 +181,6 @@ public class SymbolLayerActivity extends AppCompatActivity implements MapboxMap.
   @Override
   public boolean onOptionsItemSelected(MenuItem item) {
     switch (item.getItemId()) {
-      case android.R.id.home:
-        onBackPressed();
-        return true;
       case R.id.action_toggle_text_size:
         toggleTextSize();
         return true;
@@ -211,5 +194,4 @@ public class SymbolLayerActivity extends AppCompatActivity implements MapboxMap.
         return super.onOptionsItemSelected(item);
     }
   }
-
 }

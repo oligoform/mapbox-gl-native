@@ -1,9 +1,8 @@
 #import "MGLMultiPoint_Private.h"
 #import "MGLGeometry_Private.h"
+#import "MGLShape_Private.h"
+#import "NSCoder+MGLAdditions.h"
 #import "MGLTypes.h"
-
-#include <mbgl/util/geo.hpp>
-#include <mbgl/util/optional.hpp>
 
 @implementation MGLMultiPoint
 {
@@ -25,6 +24,39 @@
     }
 
     return self;
+}
+
+- (instancetype)initWithCoder:(NSCoder *)decoder
+{
+    if (self = [super initWithCoder:decoder]) {
+        _coordinates = [decoder mgl_decodeLocationCoordinates2DForKey:@"coordinates"];
+    }
+    return self;
+}
+
+- (void)encodeWithCoder:(NSCoder *)coder
+{
+    [super encodeWithCoder:coder];
+    [coder mgl_encodeLocationCoordinates2D:_coordinates forKey:@"coordinates"];
+}
+
+- (BOOL)isEqual:(id)other
+{
+    if (self == other) return YES;
+    if (![other isKindOfClass:[MGLMultiPoint class]]) return NO;
+
+    MGLMultiPoint *otherMultipoint = other;
+    return ([super isEqual:otherMultipoint]
+            && _coordinates == otherMultipoint->_coordinates);
+}
+
+- (NSUInteger)hash
+{
+    NSUInteger hash = [super hash];
+    for (auto coord : _coordinates) {
+        hash += @(coord.latitude+coord.longitude).hash;
+    }
+    return hash;
 }
 
 - (CLLocationCoordinate2D)coordinate
@@ -65,7 +97,7 @@
         [NSException raise:NSInvalidArgumentException
                     format:@"A multipoint must have at least one vertex."];
     }
-    
+
     [self willChangeValueForKey:@"coordinates"];
     _coordinates = { coords, coords + count };
     _bounds = {};
@@ -76,13 +108,13 @@
     if (!count) {
         return;
     }
-    
+
     if (index > _coordinates.size()) {
         [NSException raise:NSRangeException
                     format:@"Invalid index %lu for existing coordinate count %ld",
          (unsigned long)index, (unsigned long)[self pointCount]];
     }
-    
+
     [self willChangeValueForKey:@"coordinates"];
     _coordinates.insert(_coordinates.begin() + index, count, *coords);
     _bounds = {};
@@ -103,7 +135,7 @@
     if (!count && !range.length) {
         return;
     }
-    
+
     if (NSMaxRange(range) > _coordinates.size()) {
         [NSException raise:NSRangeException
                     format:@"Invalid range %@ for existing coordinate count %ld",
@@ -131,7 +163,11 @@
     if (!_bounds) {
         mbgl::LatLngBounds bounds = mbgl::LatLngBounds::empty();
         for (auto coordinate : _coordinates) {
-            bounds.extend(mbgl::LatLng(coordinate.latitude, coordinate.longitude));
+            if (!CLLocationCoordinate2DIsValid(coordinate)) {
+                bounds = mbgl::LatLngBounds::empty();
+                break;
+            }
+            bounds.extend(MGLLatLngFromLocationCoordinate2D(coordinate));
         }
         _bounds = bounds;
     }
@@ -146,7 +182,7 @@
 - (mbgl::Annotation)annotationObjectWithDelegate:(__unused id <MGLMultiPointDelegate>)delegate
 {
     NSAssert(NO, @"Cannot add an annotation from an instance of %@", NSStringFromClass([self class]));
-    return mbgl::SymbolAnnotation({mbgl::Point<double>()});
+    return mbgl::SymbolAnnotation(mbgl::Point<double>());
 }
 
 - (NSString *)description

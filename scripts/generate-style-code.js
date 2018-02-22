@@ -1,8 +1,9 @@
+#!/usr/bin/env node
 'use strict';
 
 const fs = require('fs');
 const ejs = require('ejs');
-const spec = require('mapbox-gl-style-spec').latest;
+const spec = require('./style-spec');
 const colorParser = require('csscolorparser');
 
 require('./style-code');
@@ -14,12 +15,26 @@ function parseCSSColor(str) {
   ];
 }
 
-global.propertyType = function (property) {
+global.isDataDriven = function (property) {
+  return property['property-function'] === true;
+};
+
+global.isLightProperty = function (property) {
+  return property['light-property'] === true;
+};
+
+global.evaluatedType = function (property) {
   if (/-translate-anchor$/.test(property.name)) {
     return 'TranslateAnchorType';
   }
   if (/-(rotation|pitch|illumination)-alignment$/.test(property.name)) {
     return 'AlignmentType';
+  }
+  if (/^(text|icon)-anchor$/.test(property.name)) {
+    return 'SymbolAnchorType';
+  }
+  if (/position/.test(property.name)) {
+    return 'Position';
   }
   switch (property.type) {
   case 'boolean':
@@ -29,16 +44,63 @@ global.propertyType = function (property) {
   case 'string':
     return 'std::string';
   case 'enum':
-    return `${camelize(property.name)}Type`;
+    return (isLightProperty(property) ? 'Light' : '') + `${camelize(property.name)}Type`;
   case 'color':
     return `Color`;
   case 'array':
     if (property.length) {
-      return `std::array<${propertyType({type: property.value})}, ${property.length}>`;
+      return `std::array<${evaluatedType({type: property.value})}, ${property.length}>`;
     } else {
-      return `std::vector<${propertyType({type: property.value})}>`;
+      return `std::vector<${evaluatedType({type: property.value})}>`;
     }
   default: throw new Error(`unknown type for ${property.name}`)
+  }
+};
+
+function attributeUniformType(property, type) {
+    const attributeNameExceptions = {
+      'text-opacity': 'opacity',
+      'icon-opacity': 'opacity',
+      'text-color': 'fill_color',
+      'icon-color': 'fill_color',
+      'text-halo-color': 'halo_color',
+      'icon-halo-color': 'halo_color',
+      'text-halo-blur': 'halo_blur',
+      'icon-halo-blur': 'halo_blur',
+      'text-halo-width': 'halo_width',
+      'icon-halo-width': 'halo_width',
+      'line-gap-width': 'gapwidth'
+    }
+    const name = attributeNameExceptions[property.name] ||
+        property.name.replace(type + '-', '').replace(/-/g, '_');
+    return `attributes::a_${name}${name === 'offset' ? '<1>' : ''}, uniforms::u_${name}`;
+}
+
+global.layoutPropertyType = function (property) {
+  if (isDataDriven(property)) {
+    return `DataDrivenLayoutProperty<${evaluatedType(property)}>`;
+  } else {
+    return `LayoutProperty<${evaluatedType(property)}>`;
+  }
+};
+
+global.paintPropertyType = function (property, type) {
+  if (isDataDriven(property)) {
+    return `DataDrivenPaintProperty<${evaluatedType(property)}, ${attributeUniformType(property, type)}>`;
+  } else if (/-pattern$/.test(property.name) || property.name === 'line-dasharray') {
+    return `CrossFadedPaintProperty<${evaluatedType(property)}>`;
+  } else {
+    return `PaintProperty<${evaluatedType(property)}>`;
+  }
+};
+
+global.propertyValueType = function (property) {
+  if (isDataDriven(property)) {
+    return `DataDrivenPropertyValue<${evaluatedType(property)}>`;
+  } else if (property.name === 'heatmap-color') {
+    return `HeatmapColorPropertyValue`;
+  } else {
+    return `PropertyValue<${evaluatedType(property)}>`;
   }
 };
 
@@ -52,6 +114,10 @@ global.defaultValue = function (property) {
     return '{}';
   }
 
+  if (property.name === 'heatmap-color') {
+      return '{}';
+  }
+
   switch (property.type) {
   case 'number':
     return property.default;
@@ -59,9 +125,9 @@ global.defaultValue = function (property) {
     return JSON.stringify(property.default || "");
   case 'enum':
     if (property.default === undefined) {
-      return `${propertyType(property)}::Undefined`;
+      return `${evaluatedType(property)}::Undefined`;
     } else {
-      return `${propertyType(property)}::${camelize(property.default)}`;
+      return `${evaluatedType(property)}::${camelize(property.default)}`;
     }
   case 'color':
     const color = parseCSSColor(property.default).join(', ');
@@ -127,5 +193,19 @@ for (const layer of layers) {
   writeIfModified(`src/mbgl/style/layers/${layerFileName}_layer_properties.cpp`, propertiesCpp(layer));
 }
 
-const propertySettersHpp = ejs.compile(fs.readFileSync('include/mbgl/style/conversion/make_property_setters.hpp.ejs', 'utf8'), {strict: true});
-writeIfModified('include/mbgl/style/conversion/make_property_setters.hpp', propertySettersHpp({layers: layers}));
+const propertySettersHpp = ejs.compile(fs.readFileSync('src/mbgl/style/conversion/make_property_setters.hpp.ejs', 'utf8'), {strict: true});
+writeIfModified('src/mbgl/style/conversion/make_property_setters.hpp', propertySettersHpp({layers: layers}));
+
+// Light
+const lightProperties = Object.keys(spec[`light`]).reduce((memo, name) => {
+  var property = spec[`light`][name];
+  property.name = name;
+  property['light-property'] = true;
+  memo.push(property);
+  return memo;
+}, []);
+
+const lightHpp = ejs.compile(fs.readFileSync('include/mbgl/style/light.hpp.ejs', 'utf8'), {strict: true});
+const lightCpp = ejs.compile(fs.readFileSync('src/mbgl/style/light.cpp.ejs', 'utf8'), {strict: true});
+writeIfModified(`include/mbgl/style/light.hpp`, lightHpp({properties: lightProperties}));
+writeIfModified(`src/mbgl/style/light.cpp`, lightCpp({properties: lightProperties}));

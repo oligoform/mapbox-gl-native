@@ -4,7 +4,7 @@
 #include <TargetConditionals.h>
 #endif
 
-#if __ANDROID__
+#if ANDROID
 #define TEST_READ_ONLY 0
 #define TEST_HAS_SERVER 0
 #elif TARGET_OS_IOS
@@ -21,7 +21,7 @@
 #define TEST_IS_SIMULATOR 0
 #endif
 
-#if !TEST_IS_SIMULATOR
+#if !TEST_IS_SIMULATOR && !CI_BUILD
 #define TEST_REQUIRES_ACCURATE_TIMING(name) name
 #else
 #define TEST_REQUIRES_ACCURATE_TIMING(name) DISABLED_ ## name
@@ -54,11 +54,6 @@
 #include <gtest/gtest.h>
 
 namespace mbgl {
-
-class Map;
-class OffscreenView;
-class HeadlessDisplay;
-
 namespace test {
 
 class Server {
@@ -69,10 +64,6 @@ public:
 private:
     int fd = -1;
 };
-
-std::shared_ptr<HeadlessDisplay> sharedDisplay();
-
-PremultipliedImage render(Map&, OffscreenView&);
 
 void checkImage(const std::string& base,
                 const PremultipliedImage& actual,

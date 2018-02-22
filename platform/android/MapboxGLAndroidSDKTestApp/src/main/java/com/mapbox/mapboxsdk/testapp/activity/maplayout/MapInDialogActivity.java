@@ -1,14 +1,13 @@
 package com.mapbox.mapboxsdk.testapp.activity.maplayout;
 
+import android.app.Dialog;
 import android.os.Bundle;
+import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.DialogFragment;
 import android.support.v4.app.FragmentManager;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.view.LayoutInflater;
-import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
@@ -16,6 +15,12 @@ import android.widget.Button;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.testapp.R;
 
+/**
+ * Test activity showcasing showing a Map inside of a DialogFragment.
+ * <p>
+ * Uses the deprecated TextureView API to workaround the issue of seeing a grey background before the gl surface.
+ * </p>
+ */
 public class MapInDialogActivity extends AppCompatActivity {
 
   @Override
@@ -23,35 +28,12 @@ public class MapInDialogActivity extends AppCompatActivity {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_map_in_dialog);
 
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
-    }
-
     Button button = (Button) findViewById(R.id.button_open_dialog);
-    button.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View view) {
-        FragmentManager fm = getSupportFragmentManager();
-        MapDialogFragment editNameDialogFragment = MapDialogFragment.newInstance("Map Dialog");
-        editNameDialogFragment.show(fm, "fragment_dialog_map");
-      }
+    button.setOnClickListener(view -> {
+      FragmentManager fm = getSupportFragmentManager();
+      MapDialogFragment editNameDialogFragment = MapDialogFragment.newInstance("Map Dialog");
+      editNameDialogFragment.show(fm, "fragment_dialog_map");
     });
-  }
-
-  @Override
-  public boolean onOptionsItemSelected(MenuItem item) {
-    switch (item.getItemId()) {
-      case android.R.id.home:
-        onBackPressed();
-        return true;
-      default:
-        return super.onOptionsItemSelected(item);
-    }
   }
 
   public static class MapDialogFragment extends DialogFragment {
@@ -82,6 +64,22 @@ public class MapInDialogActivity extends AppCompatActivity {
       mapView.onCreate(savedInstanceState);
     }
 
+    @NonNull
+    @Override
+    public Dialog onCreateDialog(Bundle savedInstanceState) {
+      return new Dialog(getActivity(), getTheme()) {
+        boolean destroyed = false;
+        @Override
+        public void dismiss() {
+          if (mapView != null && !destroyed) {
+            mapView.onDestroy();
+            destroyed = true;
+          }
+          super.dismiss();
+        }
+      };
+    }
+
     @Override
     public void onStart() {
       super.onStart();
@@ -104,12 +102,6 @@ public class MapInDialogActivity extends AppCompatActivity {
     public void onStop() {
       super.onStop();
       mapView.onStop();
-    }
-
-    @Override
-    public void onDestroy() {
-      super.onDestroy();
-      mapView.onDestroy();
     }
 
     @Override

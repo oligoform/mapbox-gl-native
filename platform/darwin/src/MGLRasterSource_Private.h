@@ -1,6 +1,6 @@
 #import "MGLRasterSource.h"
 
-NS_ASSUME_NONNULL_BEGIN
+#include <memory>
 
 namespace mbgl {
     namespace style {
@@ -8,9 +8,13 @@ namespace mbgl {
     }
 }
 
+NS_ASSUME_NONNULL_BEGIN
+
 @interface MGLRasterSource (Private)
 
-- (instancetype)initWithRawSource:(mbgl::style::RasterSource *)rawSource;
+@property (nonatomic, readonly) mbgl::style::RasterSource *rawSource;
+
+- (std::unique_ptr<mbgl::style::RasterSource>)pendingSourceWithIdentifier:(NSString *)identifier configurationURL:(NSURL *)configurationURL tileSize:(CGFloat)tileSize;
 
 @end
 

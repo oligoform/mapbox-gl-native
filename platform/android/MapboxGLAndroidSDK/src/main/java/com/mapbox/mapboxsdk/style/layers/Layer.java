@@ -2,6 +2,9 @@ package com.mapbox.mapboxsdk.style.layers;
 
 import android.support.annotation.NonNull;
 
+import com.mapbox.mapboxsdk.style.expressions.Expression;
+import com.mapbox.mapboxsdk.style.functions.Function;
+
 /**
  * Base class for the different Layer types
  */
@@ -17,14 +20,14 @@ public abstract class Layer {
   public Layer() {
   }
 
-  public void setProperties(@NonNull Property<?>... properties) {
+  public void setProperties(@NonNull PropertyValue<?>... properties) {
     if (properties.length == 0) {
       return;
     }
 
-    for (Property<?> property : properties) {
+    for (PropertyValue<?> property : properties) {
       Object converted = convertValue(property.value);
-      if (property instanceof PaintProperty) {
+      if (property instanceof PaintPropertyValue) {
         nativeSetPaintProperty(property.name, converted);
       } else {
         nativeSetLayoutProperty(property.name, converted);
@@ -37,7 +40,7 @@ public abstract class Layer {
   }
 
   public PropertyValue<String> getVisibility() {
-    return new PropertyValue<>(nativeGetVisibility());
+    return new PaintPropertyValue<>("visibility", (String) nativeGetVisibility());
   }
 
   public float getMinZoom() {
@@ -71,6 +74,8 @@ public abstract class Layer {
 
   protected native void nativeSetSourceLayer(String sourceLayer);
 
+  protected native String nativeGetSourceLayer();
+
   protected native float nativeGetMinZoom();
 
   protected native float nativeGetMaxZoom();
@@ -84,6 +89,14 @@ public abstract class Layer {
   }
 
   private Object convertValue(Object value) {
-    return value != null && value instanceof Function ? ((Function) value).toValueObject() : value;
+    if (value != null) {
+      if (value instanceof Function) {
+        return ((Function) value).toValueObject();
+      } else if (value instanceof Expression) {
+        return ((Expression) value).toArray();
+      }
+    }
+    return value;
   }
+
 }

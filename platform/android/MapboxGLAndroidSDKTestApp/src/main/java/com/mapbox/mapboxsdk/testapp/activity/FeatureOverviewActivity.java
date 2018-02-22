@@ -1,6 +1,5 @@
 package com.mapbox.mapboxsdk.testapp.activity;
 
-import android.Manifest;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.pm.ActivityInfo;
@@ -8,73 +7,70 @@ import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.os.AsyncTask;
+import android.os.Build;
 import android.os.Bundle;
 import android.support.annotation.NonNull;
 import android.support.annotation.StringRes;
 import android.support.design.widget.Snackbar;
-import android.support.v4.app.ActivityCompat;
-import android.support.v4.content.ContextCompat;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.LinearLayoutManager;
 import android.support.v7.widget.RecyclerView;
-import android.support.v7.widget.Toolbar;
-
-import timber.log.Timber;
-
-import android.view.View;
+import android.text.TextUtils;
 
 import com.mapbox.mapboxsdk.testapp.R;
 import com.mapbox.mapboxsdk.testapp.adapter.FeatureAdapter;
 import com.mapbox.mapboxsdk.testapp.adapter.FeatureSectionAdapter;
 import com.mapbox.mapboxsdk.testapp.model.activity.Feature;
 import com.mapbox.mapboxsdk.testapp.utils.ItemClickSupport;
+import com.mapbox.android.core.permissions.PermissionsListener;
+import com.mapbox.android.core.permissions.PermissionsManager;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 
-public class FeatureOverviewActivity extends AppCompatActivity {
+import timber.log.Timber;
+
+/**
+ * Activity shown when application is started
+ * <p>
+ * This activity  will generate data for RecyclerView based on the AndroidManifest entries.
+ * It uses tags as category and description to order the different entries.
+ * </p>
+ */
+public class FeatureOverviewActivity extends AppCompatActivity implements PermissionsListener {
 
   private static final String KEY_STATE_FEATURES = "featureList";
 
+  private PermissionsManager permissionsManager;
   private RecyclerView recyclerView;
   private FeatureSectionAdapter sectionAdapter;
   private List<Feature> features;
+  private int locationActivityInList;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
-    setContentView(R.layout.activity_main);
+    setContentView(R.layout.activity_feature_overview);
 
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    toolbar.setTitle(getString(R.string.app_name));
-    setSupportActionBar(toolbar);
-
-    ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setElevation(getResources().getDimension(R.dimen.toolbar_shadow));
-    }
+    permissionsManager = new PermissionsManager(this);
 
     recyclerView = (RecyclerView) findViewById(R.id.recyclerView);
     recyclerView.setLayoutManager(new LinearLayoutManager(this));
     recyclerView.addOnItemTouchListener(new RecyclerView.SimpleOnItemTouchListener());
     recyclerView.setHasFixedSize(true);
 
-    ItemClickSupport.addTo(recyclerView).setOnItemClickListener(new ItemClickSupport.OnItemClickListener() {
-      @Override
-      public void onItemClicked(RecyclerView recyclerView, int position, View view) {
-        if (!sectionAdapter.isSectionHeaderPosition(position)) {
-          int itemPosition = sectionAdapter.getConvertedPosition(position);
-          Feature feature = features.get(itemPosition);
-          if (feature.isRequiresLocationPermission()) {
-            if (requestLocationPermission(itemPosition)) {
-              return;
-            }
+    ItemClickSupport.addTo(recyclerView).setOnItemClickListener((recyclerView, position, view) -> {
+      if (!sectionAdapter.isSectionHeaderPosition(position)) {
+        int itemPosition = sectionAdapter.getConvertedPosition(position);
+        Feature feature = features.get(itemPosition);
+        if (feature.isRequiresLocationPermission()) {
+          if (requestLocationPermission(itemPosition)) {
+            return;
           }
-          startFeature(feature);
         }
+        startFeature(feature);
       }
     });
 
@@ -92,7 +88,7 @@ public class FeatureOverviewActivity extends AppCompatActivity {
         getPackageManager().getPackageInfo(getPackageName(),
           PackageManager.GET_ACTIVITIES | PackageManager.GET_META_DATA));
     } catch (PackageManager.NameNotFoundException exception) {
-      Timber.e("Could not resolve package info", exception);
+      Timber.e(exception, "Could not resolve package info");
     }
   }
 
@@ -123,28 +119,42 @@ public class FeatureOverviewActivity extends AppCompatActivity {
   }
 
   private boolean requestLocationPermission(final int positionInList) {
-    if ((ContextCompat.checkSelfPermission(FeatureOverviewActivity.this,
-      Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED)
-      || (ContextCompat.checkSelfPermission(FeatureOverviewActivity.this,
-      Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED)) {
-      ActivityCompat.requestPermissions(FeatureOverviewActivity.this, new String[] {
-        Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION}, positionInList);
+    if (isRuntimePermissionsRequired()) {
+      locationActivityInList = positionInList;
+      permissionsManager.requestLocationPermissions(this);
       return true;
-    } else {
-      return false;
     }
+    return false;
   }
 
   @Override
-  public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-    if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-      startFeature(features.get(requestCode));
+  public void onExplanationNeeded(List<String> list) {
+    Snackbar.make(
+      findViewById(android.R.id.content),
+      TextUtils.join("", list.toArray()),
+      Snackbar.LENGTH_SHORT).show();
+  }
+
+  @Override
+  public void onPermissionResult(boolean isPermissionGranted) {
+    if (isPermissionGranted) {
+      startFeature(features.get(locationActivityInList));
     } else {
       Snackbar.make(
         findViewById(android.R.id.content),
         "Can't open without accepting the location permission.",
         Snackbar.LENGTH_SHORT).show();
     }
+  }
+
+  @Override
+  public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
+    super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+    permissionsManager.onRequestPermissionsResult(requestCode, permissions, grantResults);
+  }
+
+  private boolean isRuntimePermissionsRequired() {
+    return android.os.Build.VERSION.SDK_INT >= Build.VERSION_CODES.M;
   }
 
   @Override
@@ -174,15 +184,12 @@ public class FeatureOverviewActivity extends AppCompatActivity {
       }
 
       if (!features.isEmpty()) {
-        Comparator<Feature> comparator = new Comparator<Feature>() {
-          @Override
-          public int compare(Feature lhs, Feature rhs) {
-            int result = lhs.getCategory().compareToIgnoreCase(rhs.getCategory());
-            if (result == 0) {
-              result = lhs.getLabel().compareToIgnoreCase(rhs.getLabel());
-            }
-            return result;
+        Comparator<Feature> comparator = (lhs, rhs) -> {
+          int result = lhs.getCategory().compareToIgnoreCase(rhs.getCategory());
+          if (result == 0) {
+            result = lhs.getLabel().compareToIgnoreCase(rhs.getLabel());
           }
+          return result;
         };
         Collections.sort(features, comparator);
       }
@@ -215,15 +222,13 @@ public class FeatureOverviewActivity extends AppCompatActivity {
         }
       };
 
-      List<String> requiresPermissionActvities = new ArrayList<String>() {
+      List<String> requiresPermissionActivities = new ArrayList<String>() {
         {
           add(resources.getString(R.string.activity_double_map));
-          add(getString(R.string.activity_location_picker));
-          add(getString(R.string.activity_car_driving));
         }
       };
 
-      return requiresPermissionCategories.contains(category) || requiresPermissionActvities.contains(name);
+      return requiresPermissionCategories.contains(category) || requiresPermissionActivities.contains(name);
     }
 
     @Override

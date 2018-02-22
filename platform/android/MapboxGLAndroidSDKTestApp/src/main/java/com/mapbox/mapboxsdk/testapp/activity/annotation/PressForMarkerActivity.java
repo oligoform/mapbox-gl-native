@@ -2,11 +2,8 @@ package com.mapbox.mapboxsdk.testapp.activity.annotation;
 
 import android.graphics.PointF;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.view.Menu;
 import android.view.MenuItem;
 
@@ -14,12 +11,17 @@ import com.mapbox.mapboxsdk.annotations.MarkerOptions;
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.testapp.R;
 
 import java.text.DecimalFormat;
 import java.util.ArrayList;
 
+/**
+ * Test activity showcasing to add a Marker on click.
+ * <p>
+ * Shows how to use a OnMapClickListener and a OnMapLongClickListener
+ * </p>
+ */
 public class PressForMarkerActivity extends AppCompatActivity {
 
   private MapView mapView;
@@ -35,48 +37,37 @@ public class PressForMarkerActivity extends AppCompatActivity {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_press_for_marker);
 
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
-    }
-
     mapView = (MapView) findViewById(R.id.mapView);
     mapView.onCreate(savedInstanceState);
-    mapView.getMapAsync(new OnMapReadyCallback() {
-      @Override
-      public void onMapReady(final MapboxMap map) {
-        mapboxMap = map;
-        resetMap();
+    mapView.getMapAsync(map -> {
+      mapboxMap = map;
+      resetMap();
 
-        mapboxMap.setOnMapLongClickListener(new MapboxMap.OnMapLongClickListener() {
-          @Override
-          public void onMapLongClick(@NonNull LatLng point) {
-            final PointF pixel = mapboxMap.getProjection().toScreenLocation(point);
+      mapboxMap.setOnMapLongClickListener(point -> addMarker(point));
 
-            String title = LAT_LON_FORMATTER.format(point.getLatitude()) + ", "
-              + LAT_LON_FORMATTER.format(point.getLongitude());
-            String snippet = "X = " + (int) pixel.x + ", Y = " + (int) pixel.y;
+      mapboxMap.setOnMapClickListener(point -> addMarker(point));
 
-            MarkerOptions marker = new MarkerOptions()
-              .position(point)
-              .title(title)
-              .snippet(snippet);
-
-            markerList.add(marker);
-            mapboxMap.addMarker(marker);
-          }
-        });
-
-        if (savedInstanceState != null) {
-          markerList = savedInstanceState.getParcelableArrayList(STATE_MARKER_LIST);
-          mapboxMap.addMarkers(markerList);
-        }
+      if (savedInstanceState != null) {
+        markerList = savedInstanceState.getParcelableArrayList(STATE_MARKER_LIST);
+        mapboxMap.addMarkers(markerList);
       }
     });
+  }
+
+  private void addMarker(LatLng point) {
+    final PointF pixel = mapboxMap.getProjection().toScreenLocation(point);
+
+    String title = LAT_LON_FORMATTER.format(point.getLatitude()) + ", "
+      + LAT_LON_FORMATTER.format(point.getLongitude());
+    String snippet = "X = " + (int) pixel.x + ", Y = " + (int) pixel.y;
+
+    MarkerOptions marker = new MarkerOptions()
+      .position(point)
+      .title(title)
+      .snippet(snippet);
+
+    markerList.add(marker);
+    mapboxMap.addMarker(marker);
   }
 
   private void resetMap() {
@@ -139,9 +130,6 @@ public class PressForMarkerActivity extends AppCompatActivity {
   @Override
   public boolean onOptionsItemSelected(MenuItem item) {
     switch (item.getItemId()) {
-      case android.R.id.home:
-        onBackPressed();
-        return true;
       case R.id.menuItemReset:
         resetMap();
         return true;

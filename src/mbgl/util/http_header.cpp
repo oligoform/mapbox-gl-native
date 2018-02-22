@@ -1,12 +1,17 @@
 #include <mbgl/util/http_header.hpp>
 
+#include <mbgl/util/string.hpp>
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunknown-pragmas"
 #pragma GCC diagnostic ignored "-Wunused-parameter"
 #pragma GCC diagnostic ignored "-Wshadow"
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wshorten-64-to-32"
 #include <boost/spirit/include/qi.hpp>
 #include <boost/spirit/include/phoenix_core.hpp>
 #include <boost/spirit/include/phoenix_operator.hpp>
+#pragma clang diagnostic pop
 #pragma GCC diagnostic pop
 
 namespace mbgl {
@@ -28,7 +33,7 @@ CacheControl CacheControl::parse(const std::string& value) {
 optional<Timestamp> CacheControl::toTimePoint() const {
     return maxAge ? util::now() + Seconds(*maxAge) : optional<Timestamp>{};
 }
-    
+
 optional<Timestamp> parseRetryHeaders(const optional<std::string>& retryAfter,
                                       const optional<std::string>& xRateLimitReset) {
     if (retryAfter) {
@@ -45,7 +50,7 @@ optional<Timestamp> parseRetryHeaders(const optional<std::string>& retryAfter,
             return {};
         }
     }
-    
+
     return {};
 }
 

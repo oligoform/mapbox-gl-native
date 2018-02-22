@@ -3,6 +3,10 @@
 #import "AppDelegate.h"
 #import "LimeGreenStyleLayer.h"
 #import "DroppedPinAnnotation.h"
+#import "MGLMapsnapshotter.h"
+
+#import "MGLStyle+MBXAdditions.h"
+#import "MGLVectorSource_Private.h"
 
 #import <Mapbox/Mapbox.h>
 
@@ -19,10 +23,13 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     NSMutableArray *flattenedShapes = [NSMutableArray arrayWithCapacity:shapes.count];
     for (id <MGLAnnotation> shape in shapes) {
         NSArray *subshapes;
-        // Flatten multipoints but not polylines or polygons.
-        if ([shape isMemberOfClass:[MGLMultiPoint class]]) {
-            NSUInteger pointCount = [(MGLMultiPoint *)shape pointCount];
-            CLLocationCoordinate2D *coordinates = [(MGLMultiPoint *)shape coordinates];
+        if ([shape isKindOfClass:[MGLMultiPolyline class]]) {
+            subshapes = [(MGLMultiPolyline *)shape polylines];
+        } else if ([shape isKindOfClass:[MGLMultiPolygon class]]) {
+            subshapes = [(MGLMultiPolygon *)shape polygons];
+        } else if ([shape isKindOfClass:[MGLPointCollection class]]) {
+            NSUInteger pointCount = [(MGLPointCollection *)shape pointCount];
+            CLLocationCoordinate2D *coordinates = [(MGLPointCollection *)shape coordinates];
             NSMutableArray *pointAnnotations = [NSMutableArray arrayWithCapacity:pointCount];
             for (NSUInteger i = 0; i < pointCount; i++) {
                 MGLPointAnnotation *pointAnnotation = [[MGLPointAnnotation alloc] init];
@@ -30,14 +37,10 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
                 [pointAnnotations addObject:pointAnnotation];
             }
             subshapes = pointAnnotations;
-        } else if ([shape isKindOfClass:[MGLMultiPolyline class]]) {
-            subshapes = [(MGLMultiPolyline *)shape polylines];
-        } else if ([shape isKindOfClass:[MGLMultiPolygon class]]) {
-            subshapes = [(MGLMultiPolygon *)shape polygons];
         } else if ([shape isKindOfClass:[MGLShapeCollection class]]) {
             subshapes = MBXFlattenedShapes([(MGLShapeCollection *)shape shapes]);
         }
-        
+
         if (subshapes) {
             [flattenedShapes addObjectsFromArray:subshapes];
         } else {
@@ -47,7 +50,26 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     return flattenedShapes;
 }
 
-@interface MapDocument () <NSWindowDelegate, NSSharingServicePickerDelegate, NSMenuDelegate, NSSplitViewDelegate, MGLMapViewDelegate>
+@interface MGLVectorSource (MBXAdditions)
+
+@property (nonatomic, readonly, getter=isMapboxTerrain) BOOL mapboxTerrain;
+
+@end
+
+@implementation MGLVectorSource (MBXAdditions)
+
+- (BOOL)isMapboxTerrain {
+    NSURL *url = self.configurationURL;
+    if (![url.scheme isEqualToString:@"mapbox"]) {
+        return NO;
+    }
+    NSArray *identifiers = [url.host componentsSeparatedByString:@","];
+    return [identifiers containsObject:@"mapbox.mapbox-terrain-v2"] || [identifiers containsObject:@"mapbox.mapbox-terrain-v1"];
+}
+
+@end
+
+@interface MapDocument () <NSWindowDelegate, NSSharingServicePickerDelegate, NSMenuDelegate, NSSplitViewDelegate, MGLMapViewDelegate, MGLComputedShapeSourceDataSource>
 
 @property (weak) IBOutlet NSArrayController *styleLayersArrayController;
 @property (weak) IBOutlet NSTableView *styleLayersTableView;
@@ -60,17 +82,20 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     /// Style URL inherited from an existing document at the time this document
     /// was created.
     NSURL *_inheritedStyleURL;
-    
+
     NSPoint _mouseLocationForMapViewContextMenu;
     NSUInteger _droppedPinCounter;
     NSNumberFormatter *_spellOutNumberFormatter;
-    
+
     BOOL _isLocalizingLabels;
     BOOL _showsToolTipsOnDroppedPins;
     BOOL _randomizesCursorsOnDroppedPins;
     BOOL _isTouringWorld;
     BOOL _isShowingPolygonAndPolylineAnnotations;
     BOOL _isShowingAnimatedAnnotation;
+    
+    // Snapshotter
+    MGLMapSnapshotter* snapshotter;
 }
 
 #pragma mark Lifecycle
@@ -92,19 +117,19 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
 
 - (void)windowControllerDidLoadNib:(NSWindowController *)controller {
     [super windowControllerDidLoadNib:controller];
-    
+
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(userDefaultsDidChange:)
                                                  name:NSUserDefaultsDidChangeNotification
                                                object:nil];
-    
+
     _spellOutNumberFormatter = [[NSNumberFormatter alloc] init];
-    
+
     NSPressGestureRecognizer *pressGestureRecognizer = [[NSPressGestureRecognizer alloc] initWithTarget:self action:@selector(handlePressGesture:)];
     [self.mapView addGestureRecognizer:pressGestureRecognizer];
-    
+
     [self.splitView setPosition:0 ofDividerAtIndex:0];
-    
+
     [self applyPendingState];
 }
 
@@ -143,17 +168,78 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
 
 - (NSURL *)shareURL {
     NSArray *components = self.mapView.styleURL.pathComponents;
-    CLLocationCoordinate2D centerCoordinate = self.mapView.centerCoordinate;
+    MGLMapCamera *camera = self.mapView.camera;
     return [NSURL URLWithString:
-            [NSString stringWithFormat:@"https://api.mapbox.com/styles/v1/%@/%@.html?access_token=%@#%.2f/%.5f/%.5f/%.f",
+            [NSString stringWithFormat:@"https://api.mapbox.com/styles/v1/%@/%@.html?access_token=%@#%.2f/%.5f/%.5f/%.f/%.f",
              components[1], components[2], [MGLAccountManager accessToken],
-             self.mapView.zoomLevel, centerCoordinate.latitude, centerCoordinate.longitude, self.mapView.direction]];
+             self.mapView.zoomLevel, camera.centerCoordinate.latitude, camera.centerCoordinate.longitude,
+             camera.heading, camera.pitch]];
+}
+
+#pragma mark File methods
+
+- (IBAction)takeSnapshot:(id)sender {
+    MGLMapCamera *camera = self.mapView.camera;
+    
+    MGLMapSnapshotOptions *options = [[MGLMapSnapshotOptions alloc] initWithStyleURL:self.mapView.styleURL camera:camera size:self.mapView.bounds.size];
+    options.zoomLevel = self.mapView.zoomLevel;
+    
+    // Create and start the snapshotter
+    snapshotter = [[MGLMapSnapshotter alloc] initWithOptions:options];
+    [snapshotter startWithCompletionHandler:^(MGLMapSnapshot *snapshot, NSError *error) {
+        if (error) {
+            NSLog(@"Could not load snapshot: %@", error.localizedDescription);
+        } else {
+            // Set the default name for the file and show the panel.
+            NSSavePanel *panel = [NSSavePanel savePanel];
+            panel.nameFieldStringValue = [self.mapView.styleURL.lastPathComponent.stringByDeletingPathExtension stringByAppendingPathExtension:@"png"];
+            panel.allowedFileTypes = [@[(NSString *)kUTTypePNG] arrayByAddingObjectsFromArray:[NSBitmapImageRep imageUnfilteredTypes]];
+            
+            [panel beginSheetModalForWindow:self.window completionHandler:^(NSInteger result) {
+                if (result == NSFileHandlingPanelOKButton) {
+                    // Write the contents in the new format.
+                    NSURL *fileURL = panel.URL;
+                    
+                    NSBitmapImageRep *bitmapRep;
+                    for (NSImageRep *imageRep in snapshot.image.representations) {
+                        if ([imageRep isKindOfClass:[NSBitmapImageRep class]]) {
+                            bitmapRep = (NSBitmapImageRep *)imageRep;
+                            break; // stop on first bitmap rep we find
+                        }
+                    }
+                    
+                    if (!bitmapRep) {
+                        bitmapRep = [NSBitmapImageRep imageRepWithData:snapshot.image.TIFFRepresentation];
+                    }
+                    
+                    CFStringRef uti = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, (__bridge CFStringRef)fileURL.pathExtension, NULL /* inConformingToUTI */);
+                    NSBitmapImageFileType fileType = NSTIFFFileType;
+                    if (UTTypeConformsTo(uti, kUTTypePNG)) {
+                        fileType = NSPNGFileType;
+                    } else if (UTTypeConformsTo(uti, kUTTypeGIF)) {
+                        fileType = NSGIFFileType;
+                    } else if (UTTypeConformsTo(uti, kUTTypeJPEG2000)) {
+                        fileType = NSJPEG2000FileType;
+                    } else if (UTTypeConformsTo(uti, kUTTypeJPEG)) {
+                        fileType = NSJPEGFileType;
+                    } else if (UTTypeConformsTo(uti, kUTTypeBMP)) {
+                        fileType = NSBitmapImageFileTypeBMP;
+                    }
+                    
+                    NSData *imageData = [bitmapRep representationUsingType:fileType properties:@{}];
+                    [imageData writeToURL:fileURL atomically:NO];
+                }
+            }];
+
+        }
+        snapshotter = nil;
+    }];
 }
 
 #pragma mark View methods
 
 - (IBAction)showStyle:(id)sender {
-    NSInteger tag;
+    NSInteger tag = -1;
     if ([sender isKindOfClass:[NSMenuItem class]]) {
         tag = [sender tag];
     } else if ([sender isKindOfClass:[NSPopUpButton class]]) {
@@ -162,22 +248,28 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     NSURL *styleURL;
     switch (tag) {
         case 1:
-            styleURL = [MGLStyle streetsStyleURLWithVersion:MGLStyleDefaultVersion];
+            styleURL = [MGLStyle streetsStyleURL];
             break;
         case 2:
-            styleURL = [MGLStyle outdoorsStyleURLWithVersion:MGLStyleDefaultVersion];
+            styleURL = [MGLStyle outdoorsStyleURL];
             break;
         case 3:
-            styleURL = [MGLStyle lightStyleURLWithVersion:MGLStyleDefaultVersion];
+            styleURL = [MGLStyle lightStyleURL];
             break;
         case 4:
-            styleURL = [MGLStyle darkStyleURLWithVersion:MGLStyleDefaultVersion];
+            styleURL = [MGLStyle darkStyleURL];
             break;
         case 5:
-            styleURL = [MGLStyle satelliteStyleURLWithVersion:MGLStyleDefaultVersion];
+            styleURL = [MGLStyle satelliteStyleURL];
             break;
         case 6:
-            styleURL = [MGLStyle satelliteStreetsStyleURLWithVersion:MGLStyleDefaultVersion];
+            styleURL = [MGLStyle satelliteStreetsStyleURL];
+            break;
+        case 7:
+            styleURL = [NSURL URLWithString:@"mapbox://styles/mapbox/traffic-day-v2"];
+            break;
+        case 8:
+            styleURL = [NSURL URLWithString:@"mapbox://styles/mapbox/traffic-night-v2"];
             break;
         default:
             NSAssert(NO, @"Cannot set style from control with tag %li", (long)tag);
@@ -213,11 +305,11 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
 }
 
 - (IBAction)zoomIn:(id)sender {
-    [self.mapView setZoomLevel:self.mapView.zoomLevel + 1 animated:YES];
+    [self.mapView setZoomLevel:round(self.mapView.zoomLevel) + 1 animated:YES];
 }
 
 - (IBAction)zoomOut:(id)sender {
-    [self.mapView setZoomLevel:self.mapView.zoomLevel - 1 animated:YES];
+    [self.mapView setZoomLevel:round(self.mapView.zoomLevel) - 1 animated:YES];
 }
 
 - (IBAction)snapToNorth:(id)sender {
@@ -254,12 +346,12 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
 }
 
 - (void)toggleStyleLayersAtArrangedObjectIndexes:(NSIndexSet *)indices {
-    NS_ARRAY_OF(MGLStyleLayer *) *layers = [self.mapView.style.layers objectsAtIndexes:indices];
+    NS_ARRAY_OF(MGLStyleLayer *) *layers = [self.mapView.style.reversedLayers objectsAtIndexes:indices];
     BOOL isVisible = layers.firstObject.visible;
     [self.undoManager registerUndoWithTarget:self handler:^(MapDocument * _Nonnull target) {
         [target toggleStyleLayersAtArrangedObjectIndexes:indices];
     }];
-    
+
     if (!self.undoManager.undoing) {
         NSString *actionName;
         if (indices.count == 1) {
@@ -272,11 +364,11 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         [self.undoManager setActionIsDiscardable:YES];
         [self.undoManager setActionName:actionName];
     }
-    
+
     for (MGLStyleLayer *layer in layers) {
         layer.visible = !isVisible;
     }
-    
+
     NSIndexSet *columnIndices = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, 2)];
     [self.styleLayersTableView reloadDataForRowIndexes:indices columnIndexes:columnIndices];
 }
@@ -294,7 +386,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     [self.undoManager registerUndoWithTarget:self handler:^(id  _Nonnull target) {
         [self deleteStyleLayersAtArrangedObjectIndexes:indices];
     }];
-    
+
     if (!self.undoManager.undoing) {
         NSString *actionName;
         if (indices.count == 1) {
@@ -305,16 +397,16 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         }
         [self.undoManager setActionName:actionName];
     }
-    
+
     [self.styleLayersArrayController insertObjects:layers atArrangedObjectIndexes:indices];
 }
 
 - (void)deleteStyleLayersAtArrangedObjectIndexes:(NSIndexSet *)indices {
-    NS_ARRAY_OF(MGLStyleLayer *) *layers = [self.mapView.style.layers objectsAtIndexes:indices];
+    NS_ARRAY_OF(MGLStyleLayer *) *layers = [self.mapView.style.reversedLayers objectsAtIndexes:indices];
     [self.undoManager registerUndoWithTarget:self handler:^(id  _Nonnull target) {
         [self insertStyleLayers:layers atArrangedObjectIndexes:indices];
     }];
-    
+
     if (!self.undoManager.undoing) {
         NSString *actionName;
         if (indices.count == 1) {
@@ -325,62 +417,17 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         }
         [self.undoManager setActionName:actionName];
     }
-    
+
     [self.styleLayersArrayController removeObjectsAtArrangedObjectIndexes:indices];
 }
 
 - (IBAction)setLabelLanguage:(NSMenuItem *)sender {
     _isLocalizingLabels = sender.tag;
-    [self updateLabels];
+    [self reload:sender];
 }
 
 - (void)updateLabels {
-    NSString *preferredLanguageCode = self.preferredLanguageCode;
-    NSString *preferredNameToken = _isLocalizingLabels ? [NSString stringWithFormat:@"{name_%@}", preferredLanguageCode] : @"{name}";
-    NSRegularExpression *nameTokenExpression = [NSRegularExpression regularExpressionWithPattern:@"\\{name(?:_\\w{2})?\\}" options:0 error:NULL];
-    
-    for (MGLSymbolStyleLayer *layer in self.mapView.style.layers) {
-        if (![layer isKindOfClass:[MGLSymbolStyleLayer class]]) {
-            continue;
-        }
-        
-        if ([layer.textField isKindOfClass:[MGLStyleConstantValue class]]) {
-            NSString *textField = [(MGLStyleConstantValue<NSString *> *)layer.textField rawValue];
-            textField = [nameTokenExpression stringByReplacingMatchesInString:textField
-                                                                      options:0
-                                                                        range:NSMakeRange(0, textField.length)
-                                                                 withTemplate:preferredNameToken];
-            layer.textField = [MGLStyleValue<NSString *> valueWithRawValue:textField];
-        } else if ([layer.textField isKindOfClass:[MGLStyleFunction class]]) {
-            MGLStyleFunction *function = (MGLStyleFunction<NSString *> *)layer.textField;
-            NSMutableDictionary *stops = function.stops.mutableCopy;
-            [stops enumerateKeysAndObjectsUsingBlock:^(NSNumber *zoomLevel, MGLStyleConstantValue<NSString *> *stop, BOOL *done) {
-                NSString *textField = stop.rawValue;
-                textField = [nameTokenExpression stringByReplacingMatchesInString:textField
-                                                                          options:0
-                                                                            range:NSMakeRange(0, textField.length)
-                                                                     withTemplate:preferredNameToken];
-                stops[zoomLevel] = [MGLStyleValue<NSString *> valueWithRawValue:textField];
-            }];
-            function.stops = stops;
-            layer.textField = function;
-        }
-    }
-}
-
-- (NSString *)preferredLanguageCode {
-    // Languages supported by Mapbox Streets v10.
-    NSSet *supportedLanguages = [NSSet setWithObjects:@"en", @"es", @"fr", @"de", @"ru", @"zh", nil];
-    NSArray *preferredLanguages = [NSLocale preferredLanguages];
-    
-    for (NSString *language in preferredLanguages) {
-        NSString *languageCode = [[NSLocale localeWithLocaleIdentifier:language] objectForKey:NSLocaleLanguageCode];
-        if ([supportedLanguages containsObject:languageCode]) {
-            return languageCode;
-        }
-    }
-    
-    return @"en";
+    self.mapView.style.localizesLabels = _isLocalizingLabels;
 }
 
 - (void)applyPendingState {
@@ -388,7 +435,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         self.mapView.styleURL = _inheritedStyleURL;
         _inheritedStyleURL = nil;
     }
-    
+
     AppDelegate *appDelegate = (AppDelegate *)NSApp.delegate;
     if (appDelegate.pendingStyleURL) {
         self.mapView.styleURL = appDelegate.pendingStyleURL;
@@ -417,12 +464,15 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         self.mapView.zoomLevel = MIN(appDelegate.pendingMaximumZoomLevel, self.mapView.zoomLevel);
         appDelegate.pendingMaximumZoomLevel = -1;
     }
-    
+
     // Temporarily set the display name to the default center coordinate instead
     // of “Untitled” until the binding kicks in.
     NSValue *coordinateValue = [NSValue valueWithMGLCoordinate:self.mapView.centerCoordinate];
-    self.displayName = [[NSValueTransformer valueTransformerForName:@"LocationCoordinate2DTransformer"]
+    NSString *coordinateString = [[NSValueTransformer valueTransformerForName:@"LocationCoordinate2DTransformer"]
                         transformedValue:coordinateValue];
+
+
+    self.displayName = [NSString stringWithFormat:@"%@ @ %f", coordinateString, _mapView.zoomLevel];
 }
 
 #pragma mark Debug methods
@@ -472,7 +522,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
 
 - (IBAction)dropManyPins:(id)sender {
     [self removeAllAnnotations:sender];
-    
+
     NSRect bounds = self.mapView.bounds;
     NSMutableArray *annotations = [NSMutableArray array];
     for (CGFloat x = NSMinX(bounds); x < NSMaxX(bounds); x += arc4random_uniform(50)) {
@@ -480,7 +530,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
             [annotations addObject:[self pinAtPoint:NSMakePoint(x, y)]];
         }
     }
-    
+
     [NSTimer scheduledTimerWithTimeInterval:1.0/60.0
                                      target:self
                                    selector:@selector(dropOneOfManyPins:)
@@ -515,7 +565,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
 
 - (IBAction)startWorldTour:(id)sender {
     _isTouringWorld = YES;
-    
+
     [self removeAllAnnotations:sender];
     NSUInteger numberOfAnnotations = sizeof(WorldTourDestinations) / sizeof(WorldTourDestinations[0]);
     NSMutableArray *annotations = [NSMutableArray arrayWithCapacity:numberOfAnnotations];
@@ -534,7 +584,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         _isTouringWorld = NO;
         return;
     }
-    
+
     [annotations removeObjectAtIndex:0];
     MGLMapCamera *camera = [MGLMapCamera cameraLookingAtCenterCoordinate:nextAnnotation.coordinate
                                                             fromDistance:0
@@ -605,15 +655,46 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         cos(angle) * 20);
 }
 
+- (IBAction) addAnimatedImageSource:(id)sender {
+
+    MGLImage *image = [[NSBundle bundleForClass:[self class]] imageForResource:@"southeast_0"];
+
+    MGLCoordinateBounds bounds = { {22.551103322318994, -90.24006072802854}, {36.928147474567794, -75.1441643681673} };
+    MGLImageSource *imageSource = [[MGLImageSource alloc] initWithIdentifier:@"animated-radar-source" coordinateQuad:MGLCoordinateQuadFromCoordinateBounds(bounds) image:image];
+    [self.mapView.style addSource:imageSource];
+
+    MGLRasterStyleLayer * imageLayer = [[MGLRasterStyleLayer alloc] initWithIdentifier:@"animated-radar-layer" source:imageSource];
+    [self.mapView.style addLayer:imageLayer];
+    
+    [NSTimer scheduledTimerWithTimeInterval:1.0
+                                     target:self
+                                   selector:@selector(updateAnimatedImageSource:)
+                                   userInfo:imageSource
+                                    repeats:YES];
+}
+
+
+- (void)updateAnimatedImageSource:(NSTimer *)timer {
+    static int radarSuffix = 0;
+    MGLImageSource *imageSource = (MGLImageSource *)timer.userInfo;
+    
+    MGLImage *image = [[NSBundle bundleForClass:[self class]] imageForResource:[NSString stringWithFormat:@"southeast_%d", radarSuffix++]];
+    [imageSource setValue:image forKey:@"image"];
+
+    if(radarSuffix > 3) {
+        radarSuffix = 0 ;
+    }
+}
+
 - (IBAction)insertCustomStyleLayer:(id)sender {
     [self.undoManager registerUndoWithTarget:self handler:^(id  _Nonnull target) {
         [self removeCustomStyleLayer:sender];
     }];
-    
+
     if (!self.undoManager.isUndoing) {
         [self.undoManager setActionName:@"Add Lime Green Layer"];
     }
-    
+
     LimeGreenStyleLayer *layer = [[LimeGreenStyleLayer alloc] initWithIdentifier:@"mbx-custom"];
     MGLStyleLayer *houseNumberLayer = [self.mapView.style layerWithIdentifier:@"housenum-label"];
     if (houseNumberLayer) {
@@ -627,13 +708,103 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     [self.undoManager registerUndoWithTarget:self handler:^(id  _Nonnull target) {
         [self insertCustomStyleLayer:sender];
     }];
-    
+
     if (!self.undoManager.isUndoing) {
         [self.undoManager setActionName:@"Delete Lime Green Layer"];
     }
-    
+
     MGLStyleLayer *layer = [self.mapView.style layerWithIdentifier:@"mbx-custom"];
     [self.mapView.style removeLayer:layer];
+}
+
+- (IBAction)insertGraticuleLayer:(id)sender {
+    [self.undoManager registerUndoWithTarget:self handler:^(id  _Nonnull target) {
+        [self removeGraticuleLayer:sender];
+    }];
+
+    if (!self.undoManager.isUndoing) {
+        [self.undoManager setActionName:@"Add Graticule"];
+    }
+
+    NSDictionary *sourceOptions = @{
+        MGLShapeSourceOptionMaximumZoomLevel:@14,
+        MGLShapeSourceOptionWrapsCoordinates: @YES,
+        MGLShapeSourceOptionClipsCoordinates: @YES,
+    };
+    MGLComputedShapeSource *source = [[MGLComputedShapeSource alloc] initWithIdentifier:@"graticule"
+                                                                                options:sourceOptions];
+
+    source.dataSource = self;
+    [self.mapView.style addSource:source];
+    MGLLineStyleLayer *lineLayer = [[MGLLineStyleLayer alloc] initWithIdentifier:@"graticule.lines"
+                                                                          source:source];
+    [self.mapView.style addLayer:lineLayer];
+    MGLSymbolStyleLayer *labelLayer = [[MGLSymbolStyleLayer alloc] initWithIdentifier:@"graticule.labels"
+                                                                               source:source];
+    labelLayer.text = [NSExpression expressionWithFormat:@"value"];
+    [self.mapView.style addLayer:labelLayer];
+}
+
+- (IBAction)removeGraticuleLayer:(id)sender {
+    [self.undoManager registerUndoWithTarget:self handler:^(id  _Nonnull target) {
+        [self insertGraticuleLayer:sender];
+    }];
+
+    if (!self.undoManager.isUndoing) {
+        [self.undoManager setActionName:@"Delete Graticule"];
+    }
+
+    MGLStyleLayer *layer = [self.mapView.style layerWithIdentifier:@"graticule.lines"];
+    [self.mapView.style removeLayer:layer];
+
+    layer = [self.mapView.style layerWithIdentifier:@"graticule.labels"];
+    [self.mapView.style removeLayer:layer];
+
+    MGLSource *source = [self.mapView.style sourceWithIdentifier:@"graticule"];
+    [self.mapView.style removeSource:source];
+}
+
+- (IBAction)enhanceTerrain:(id)sender {
+    // Find all the identifiers of Mapbox Terrain sources used in the style.
+    NSMutableSet *terrainSourceIdentifiers = [NSMutableSet set];
+    for (MGLVectorSource *source in self.mapView.style.sources) {
+        if (![source isKindOfClass:[MGLVectorSource class]]) {
+            continue;
+        }
+        
+        if (source.mapboxTerrain) {
+            [terrainSourceIdentifiers addObject:source.identifier];
+        }
+    }
+    
+    // Find and remove all the style layers using those sources.
+    NSUInteger hillshadeIndex = NSNotFound;
+    NSEnumerator *layerEnumerator = self.mapView.style.layers.objectEnumerator;
+    MGLVectorStyleLayer *layer;
+    for (NSUInteger i = 0; (layer = layerEnumerator.nextObject); i++) {
+        if (![layer isKindOfClass:[MGLVectorStyleLayer class]]) {
+            continue;
+        }
+        
+        if ([terrainSourceIdentifiers containsObject:layer.sourceIdentifier]
+            && [layer.sourceLayerIdentifier isEqualToString:@"hillshade"]) {
+            hillshadeIndex = i;
+            [self.mapView.style removeLayer:layer];
+        }
+    }
+    
+    if (hillshadeIndex == NSNotFound) {
+        return;
+    }
+    
+    // Add a Mapbox Terrain-RGB source.
+    NSURL *terrainRGBURL = [NSURL URLWithString:@"mapbox://mapbox.terrain-rgb"];
+    MGLRasterDEMSource *terrainRGBSource = [[MGLRasterDEMSource alloc] initWithIdentifier:@"terrain" configurationURL:terrainRGBURL];
+    [self.mapView.style addSource:terrainRGBSource];
+    
+    // Insert a hillshade layer where the Mapbox Terrain–based layers were.
+    MGLHillshadeStyleLayer *hillshadeLayer = [[MGLHillshadeStyleLayer alloc] initWithIdentifier:@"hillshade" source:terrainRGBSource];
+    [self.mapView.style insertLayer:hillshadeLayer atIndex:hillshadeIndex];
 }
 
 #pragma mark Offline packs
@@ -654,7 +825,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     if ([namePrompt runModal] != NSAlertFirstButtonReturn) {
         return;
     }
-    
+
     id <MGLOfflineRegion> region = [[MGLTilePyramidOfflineRegion alloc] initWithStyleURL:self.mapView.styleURL bounds:self.mapView.visibleCoordinateBounds fromZoomLevel:self.mapView.zoomLevel toZoomLevel:self.mapView.maximumZoomLevel];
     NSData *context = [[NSValueTransformer valueTransformerForName:@"OfflinePackNameValueTransformer"] reverseTransformedValue:nameTextField.stringValue];
     [[MGLOfflineStorage sharedOfflineStorage] addPackForRegion:region withContext:context completionHandler:^(MGLOfflinePack * _Nullable pack, NSError * _Nullable error) {
@@ -680,40 +851,61 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
 }
 
 - (IBAction)manipulateStyle:(id)sender {
-    MGLFillStyleLayer *fillStyleLayer = (MGLFillStyleLayer *)[self.mapView.style layerWithIdentifier:@"water"];
-    
-    MGLStyleValue *colorFunction = [MGLStyleValue<NSColor *> valueWithStops:@{
-        @0.0: [MGLStyleValue<NSColor *> valueWithRawValue:[NSColor redColor]],
-        @10.0: [MGLStyleValue<NSColor *> valueWithRawValue:[NSColor yellowColor]],
-        @20.0: [MGLStyleValue<NSColor *> valueWithRawValue:[NSColor blackColor]],
+    MGLTransition transition = { .duration = 5, .delay = 1 };
+    self.mapView.style.transition = transition;
+
+    MGLStyleLayer *waterLayer = [self.mapView.style layerWithIdentifier:@"water"];
+    NSExpression *colorExpression = [NSExpression expressionWithFormat:@"FUNCTION($zoomLevel, 'mgl_interpolateWithCurveType:parameters:stops:', 'linear', nil, %@)", @{
+        @0.0: [NSColor redColor],
+        @10.0: [NSColor yellowColor],
+        @20.0: [NSColor blackColor],
     }];
-    fillStyleLayer.fillColor = colorFunction;
     
+    if ([waterLayer respondsToSelector:@selector(fillColor)]) {
+        [waterLayer setValue:colorExpression forKey:@"fillColor"];
+    } else if ([waterLayer respondsToSelector:@selector(lineColor)]) {
+        [waterLayer setValue:colorExpression forKey:@"lineColor"];
+    }
+
     NSString *filePath = [[NSBundle bundleForClass:self.class] pathForResource:@"amsterdam" ofType:@"geojson"];
     NSURL *geoJSONURL = [NSURL fileURLWithPath:filePath];
     MGLShapeSource *source = [[MGLShapeSource alloc] initWithIdentifier:@"ams" URL:geoJSONURL options:nil];
     [self.mapView.style addSource:source];
-    
-    MGLFillStyleLayer *fillLayer = [[MGLFillStyleLayer alloc] initWithIdentifier:@"test" source:source];
-    fillLayer.fillColor = [MGLStyleValue<NSColor *> valueWithRawValue:[NSColor greenColor]];
-    fillLayer.predicate = [NSPredicate predicateWithFormat:@"%K == %@", @"type", @"park"];
-    [self.mapView.style addLayer:fillLayer];
-    
+
+    MGLCircleStyleLayer *circleLayer = [[MGLCircleStyleLayer alloc] initWithIdentifier:@"test" source:source];
+    circleLayer.circleColor = [NSExpression expressionForConstantValue:[NSColor greenColor]];
+    circleLayer.circleRadius = [NSExpression expressionForConstantValue:@40];
+//    fillLayer.predicate = [NSPredicate predicateWithFormat:@"%K == %@", @"type", @"park"];
+    [self.mapView.style addLayer:circleLayer];
+
+    MGLSource *streetsSource = [self.mapView.style sourceWithIdentifier:@"composite"];
+    if (streetsSource) {
     NSImage *image = [NSImage imageNamed:NSImageNameIChatTheaterTemplate];
     [self.mapView.style setImage:image forName:NSImageNameIChatTheaterTemplate];
-    
-    MGLSource *streetsSource = [self.mapView.style sourceWithIdentifier:@"composite"];
-    MGLSymbolStyleLayer *theaterLayer = [[MGLSymbolStyleLayer alloc] initWithIdentifier:@"theaters" source:streetsSource];
-    theaterLayer.sourceLayerIdentifier = @"poi_label";
-    theaterLayer.predicate = [NSPredicate predicateWithFormat:@"maki == 'theatre'"];
-    theaterLayer.iconImageName = [MGLStyleValue valueWithRawValue:NSImageNameIChatTheaterTemplate];
-    theaterLayer.iconScale = [MGLStyleValue valueWithRawValue:@2];
-    theaterLayer.iconColor = [MGLStyleValue valueWithStops:@{
-        @16.0: [MGLStyleValue valueWithRawValue:[NSColor redColor]],
-        @18.0: [MGLStyleValue valueWithRawValue:[NSColor yellowColor]],
-        @20.0: [MGLStyleValue valueWithRawValue:[NSColor blackColor]],
-    }];
-    [self.mapView.style addLayer:theaterLayer];
+
+        MGLSymbolStyleLayer *theaterLayer = [[MGLSymbolStyleLayer alloc] initWithIdentifier:@"theaters" source:streetsSource];
+        theaterLayer.sourceLayerIdentifier = @"poi_label";
+        theaterLayer.predicate = [NSPredicate predicateWithFormat:@"maki == 'theatre'"];
+        theaterLayer.iconImageName = [NSExpression expressionForConstantValue:NSImageNameIChatTheaterTemplate];
+        theaterLayer.iconScale = [NSExpression expressionForConstantValue:@2];
+        theaterLayer.iconColor = [NSExpression expressionWithFormat:@"FUNCTION($zoomLevel, 'mgl_interpolateWithCurveType:parameters:stops:', 'linear', nil, %@)", @{
+            @16.0: [NSColor redColor],
+            @18.0: [NSColor yellowColor],
+            @20.0: [NSColor blackColor],
+        }];
+        [self.mapView.style addLayer:theaterLayer];
+    }
+
+    NSURL *imageURL = [NSURL URLWithString:@"https://www.mapbox.com/mapbox-gl-js/assets/radar.gif"];
+    MGLCoordinateQuad quad = { {46.437, -80.425},
+      {37.936, -80.425},
+      {37.936, -71.516},
+      {46.437, -71.516} };
+    MGLImageSource *imageSource = [[MGLImageSource alloc] initWithIdentifier:@"radar-source" coordinateQuad:quad URL:imageURL];
+    [self.mapView.style addSource:imageSource];
+
+    MGLRasterStyleLayer * imageLayer = [[MGLRasterStyleLayer alloc] initWithIdentifier:@"radar-layer" source:imageSource];
+    [self.mapView.style addLayer:imageLayer];
 }
 
 - (IBAction)dropPin:(NSMenuItem *)sender {
@@ -734,7 +926,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
             title = [feature attributeForKey:@"name_en"] ?: [feature attributeForKey:@"name"];
         }
     }
-    
+
     DroppedPinAnnotation *annotation = [[DroppedPinAnnotation alloc] init];
     annotation.coordinate = [self.mapView convertPoint:point toCoordinateFromView:self.mapView];
     annotation.title = title ?: @"Dropped Pin";
@@ -772,22 +964,28 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         NSCellStateValue state;
         switch (menuItem.tag) {
             case 1:
-                state = [styleURL isEqual:[MGLStyle streetsStyleURLWithVersion:MGLStyleDefaultVersion]];
+                state = [styleURL isEqual:[MGLStyle streetsStyleURL]];
                 break;
             case 2:
-                state = [styleURL isEqual:[MGLStyle outdoorsStyleURLWithVersion:MGLStyleDefaultVersion]];
+                state = [styleURL isEqual:[MGLStyle outdoorsStyleURL]];
                 break;
             case 3:
-                state = [styleURL isEqual:[MGLStyle lightStyleURLWithVersion:MGLStyleDefaultVersion]];
+                state = [styleURL isEqual:[MGLStyle lightStyleURL]];
                 break;
             case 4:
-                state = [styleURL isEqual:[MGLStyle darkStyleURLWithVersion:MGLStyleDefaultVersion]];
+                state = [styleURL isEqual:[MGLStyle darkStyleURL]];
                 break;
             case 5:
-                state = [styleURL isEqual:[MGLStyle satelliteStyleURLWithVersion:MGLStyleDefaultVersion]];
+                state = [styleURL isEqual:[MGLStyle satelliteStyleURL]];
                 break;
             case 6:
-                state = [styleURL isEqual:[MGLStyle satelliteStreetsStyleURLWithVersion:MGLStyleDefaultVersion]];
+                state = [styleURL isEqual:[MGLStyle satelliteStreetsStyleURL]];
+                break;
+            case 7:
+                state = [styleURL isEqual:[NSURL URLWithString:@"mapbox://styles/mapbox/traffic-day-v2"]];
+                break;
+            case 8:
+                state = [styleURL isEqual:[NSURL URLWithString:@"mapbox://styles/mapbox/traffic-night-v2"]];
                 break;
             default:
                 return NO;
@@ -824,7 +1022,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         if (row == -1) {
             menuItem.title = @"Show";
         } else {
-            BOOL isVisible = self.mapView.style.layers[row].visible;
+            BOOL isVisible = self.mapView.style.reversedLayers[row].visible;
             menuItem.title = isVisible ? @"Hide" : @"Show";
         }
         return row != -1;
@@ -836,7 +1034,8 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
         menuItem.state = menuItem.tag == _isLocalizingLabels ? NSOnState: NSOffState;
         if (menuItem.tag) {
             NSLocale *locale = [NSLocale localeWithLocaleIdentifier:[NSBundle mainBundle].developmentLocalization];
-            menuItem.title = [locale displayNameForKey:NSLocaleIdentifier value:self.preferredLanguageCode];
+            NSString *preferredLanguage = [MGLVectorSource preferredMapboxStreetsLanguage];
+            menuItem.title = [locale displayNameForKey:NSLocaleIdentifier value:preferredLanguage];
         }
         return YES;
     }
@@ -915,11 +1114,20 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     if (menuItem.action == @selector(drawAnimatedAnnotation:)) {
         return !_isShowingAnimatedAnnotation;
     }
+    if (menuItem.action == @selector(addAnimatedImageSource:)) {
+        return YES;
+    }
     if (menuItem.action == @selector(insertCustomStyleLayer:)) {
         return ![self.mapView.style layerWithIdentifier:@"mbx-custom"];
     }
+    if (menuItem.action == @selector(insertGraticuleLayer:)) {
+        return ![self.mapView.style sourceWithIdentifier:@"graticule"];
+    }
     if (menuItem.action == @selector(showAllAnnotations:) || menuItem.action == @selector(removeAllAnnotations:)) {
         return self.mapView.annotations.count > 0;
+    }
+    if (menuItem.action == @selector(enhanceTerrain:)) {
+        return YES;
     }
     if (menuItem.action == @selector(startWorldTour:)) {
         return !_isTouringWorld;
@@ -934,6 +1142,9 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     if (menuItem.action == @selector(giveFeedback:)) {
         return YES;
     }
+    if (menuItem.action == @selector(takeSnapshot:)) {
+        return !(snapshotter && [snapshotter isLoading]);
+    }
     return NO;
 }
 
@@ -941,14 +1152,16 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     if (![MGLAccountManager accessToken]) {
         return NSNotFound;
     }
-    
+
     NSArray *styleURLs = @[
-        [MGLStyle streetsStyleURLWithVersion:MGLStyleDefaultVersion],
-        [MGLStyle outdoorsStyleURLWithVersion:MGLStyleDefaultVersion],
-        [MGLStyle lightStyleURLWithVersion:MGLStyleDefaultVersion],
-        [MGLStyle darkStyleURLWithVersion:MGLStyleDefaultVersion],
-        [MGLStyle satelliteStyleURLWithVersion:MGLStyleDefaultVersion],
-        [MGLStyle satelliteStreetsStyleURLWithVersion:MGLStyleDefaultVersion],
+        [MGLStyle streetsStyleURL],
+        [MGLStyle outdoorsStyleURL],
+        [MGLStyle lightStyleURL],
+        [MGLStyle darkStyleURL],
+        [MGLStyle satelliteStyleURL],
+        [MGLStyle satelliteStreetsStyleURL],
+        [MGLStyle trafficDayStyleURL],
+        [MGLStyle trafficNightStyleURL],
     ];
     return [styleURLs indexOfObject:self.mapView.styleURL];
 }
@@ -957,7 +1170,7 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     if (!self.mapView) {
         return NO;
     }
-    
+
     SEL action = toolbarItem.action;
     if (action == @selector(showShareMenu:)) {
         [(NSButton *)toolbarItem.view sendActionOn:NSLeftMouseDownMask];
@@ -995,14 +1208,14 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
     NSImage *browserIcon = [[NSWorkspace sharedWorkspace] iconForFile:browserURL.path];
     NSString *browserName = [[NSFileManager defaultManager] displayNameAtPath:browserURL.path];
     NSString *browserServiceName = [NSString stringWithFormat:@"Open in %@", browserName];
-    
+
     NSSharingService *browserService = [[NSSharingService alloc] initWithTitle:browserServiceName
                                                                          image:browserIcon
                                                                 alternateImage:nil
                                                                        handler:^{
         [[NSWorkspace sharedWorkspace] openURL:self.shareURL];
     }];
-    
+
     NSMutableArray *sharingServices = [proposedServices mutableCopy];
     [sharingServices insertObject:browserService atIndex:0];
     return sharingServices;
@@ -1071,21 +1284,67 @@ NS_ARRAY_OF(id <MGLAnnotation>) *MBXFlattenedShapes(NS_ARRAY_OF(id <MGLAnnotatio
 
 - (void)mapView:(MGLMapView *)mapView didSelectAnnotation:(id <MGLAnnotation>)annotation {
     if ([annotation isKindOfClass:[DroppedPinAnnotation class]]) {
-        DroppedPinAnnotation *droppedPin = annotation;
+        DroppedPinAnnotation *droppedPin = (DroppedPinAnnotation *)annotation;
         [droppedPin resume];
     }
 }
 
 - (void)mapView:(MGLMapView *)mapView didDeselectAnnotation:(id <MGLAnnotation>)annotation {
     if ([annotation isKindOfClass:[DroppedPinAnnotation class]]) {
-        DroppedPinAnnotation *droppedPin = annotation;
+        DroppedPinAnnotation *droppedPin = (DroppedPinAnnotation *)annotation;
         [droppedPin pause];
     }
 }
 
-- (NSColor *)mapView:(MGLMapView *)mapView fillColorForPolygonAnnotation:(MGLPolygon *)annotation {
-    NSColor *color = [[NSColor selectedMenuItemColor] colorUsingColorSpaceName:NSCalibratedRGBColorSpace];
-    return [color colorWithAlphaComponent:0.8];
+- (CGFloat)mapView:(MGLMapView *)mapView alphaForShapeAnnotation:(MGLShape *)annotation {
+    return 0.8;
+}
+
+#pragma mark - MGLComputedShapeSourceDataSource
+- (NSArray<id <MGLFeature>>*)featuresInCoordinateBounds:(MGLCoordinateBounds)bounds zoomLevel:(NSUInteger)zoom {
+    double gridSpacing;
+    if(zoom >= 13) {
+        gridSpacing = 0.01;
+    } else if(zoom >= 11) {
+        gridSpacing = 0.05;
+    } else if(zoom == 10) {
+        gridSpacing = .1;
+    } else if(zoom == 9) {
+        gridSpacing = 0.25;
+    } else if(zoom == 8) {
+        gridSpacing = 0.5;
+    } else if (zoom >= 6) {
+        gridSpacing = 1;
+    } else if(zoom == 5) {
+        gridSpacing = 2;
+    } else if(zoom >= 4) {
+        gridSpacing = 5;
+    } else if(zoom == 2) {
+        gridSpacing = 10;
+    } else {
+        gridSpacing = 20;
+    }
+
+    NSMutableArray <id <MGLFeature>> * features = [NSMutableArray array];
+    CLLocationCoordinate2D coords[2];
+
+    for (double y = ceil(bounds.ne.latitude / gridSpacing) * gridSpacing; y >= floor(bounds.sw.latitude / gridSpacing) * gridSpacing; y -= gridSpacing) {
+        coords[0] = CLLocationCoordinate2DMake(y, bounds.sw.longitude);
+        coords[1] = CLLocationCoordinate2DMake(y, bounds.ne.longitude);
+        MGLPolylineFeature *feature = [MGLPolylineFeature polylineWithCoordinates:coords count:2];
+        feature.attributes = @{@"value": @(y)};
+        [features addObject:feature];
+    }
+
+    for (double x = floor(bounds.sw.longitude / gridSpacing) * gridSpacing; x <= ceil(bounds.ne.longitude / gridSpacing) * gridSpacing; x += gridSpacing) {
+        coords[0] = CLLocationCoordinate2DMake(bounds.sw.latitude, x);
+        coords[1] = CLLocationCoordinate2DMake(bounds.ne.latitude, x);
+        MGLPolylineFeature *feature = [MGLPolylineFeature polylineWithCoordinates:coords count:2];
+        feature.attributes = @{@"value": @(x)};
+        [features addObject:feature];
+    }
+
+    return features;
 }
 
 @end

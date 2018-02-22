@@ -1,14 +1,16 @@
-// This file is generated. 
-// Edit platform/darwin/scripts/generate-style-code.js, then run `make style-code-darwin`.
+// This file is generated.
+// Edit platform/darwin/scripts/generate-style-code.js, then run `make darwin-style-code`.
 
 #import "MGLSource.h"
-#import "MGLMapView_Private.h"
 #import "NSPredicate+MGLAdditions.h"
+#import "NSDate+MGLAdditions.h"
 #import "MGLStyleLayer_Private.h"
 #import "MGLStyleValue_Private.h"
 #import "MGLLineStyleLayer.h"
 
+#include <mbgl/style/transition_options.hpp>
 #include <mbgl/style/layers/line_layer.hpp>
+
 namespace mbgl {
 
     MBGL_DEFINE_ENUM(MGLLineCap, {
@@ -23,32 +25,25 @@ namespace mbgl {
         { MGLLineJoinMiter, "miter" },
     });
 
-    MBGL_DEFINE_ENUM(MGLLineTranslateAnchor, {
-        { MGLLineTranslateAnchorMap, "map" },
-        { MGLLineTranslateAnchorViewport, "viewport" },
+    MBGL_DEFINE_ENUM(MGLLineTranslationAnchor, {
+        { MGLLineTranslationAnchorMap, "map" },
+        { MGLLineTranslationAnchorViewport, "viewport" },
     });
 
 }
 
 @interface MGLLineStyleLayer ()
 
-@property (nonatomic) mbgl::style::LineLayer *rawLayer;
+@property (nonatomic, readonly) mbgl::style::LineLayer *rawLayer;
 
 @end
 
 @implementation MGLLineStyleLayer
-{
-    std::unique_ptr<mbgl::style::LineLayer> _pendingLayer;
-}
 
 - (instancetype)initWithIdentifier:(NSString *)identifier source:(MGLSource *)source
 {
-    if (self = [super initWithIdentifier:identifier source:source]) {
-        auto layer = std::make_unique<mbgl::style::LineLayer>(identifier.UTF8String, source.identifier.UTF8String);
-        _pendingLayer = std::move(layer);
-        self.rawLayer = _pendingLayer.get();
-    }
-    return self;
+    auto layer = std::make_unique<mbgl::style::LineLayer>(identifier.UTF8String, source.identifier.UTF8String);
+    return self = [super initWithPendingLayer:std::move(layer)];
 }
 
 - (mbgl::style::LineLayer *)rawLayer
@@ -56,9 +51,11 @@ namespace mbgl {
     return (mbgl::style::LineLayer *)super.rawLayer;
 }
 
-- (void)setRawLayer:(mbgl::style::LineLayer *)rawLayer
+- (NSString *)sourceIdentifier
 {
-    super.rawLayer = rawLayer;
+    MGLAssertStyleLayerIsValid();
+
+    return @(self.rawLayer->getSourceID().c_str());
 }
 
 - (NSString *)sourceLayerIdentifier
@@ -80,7 +77,7 @@ namespace mbgl {
 {
     MGLAssertStyleLayerIsValid();
 
-    self.rawLayer->setFilter(predicate.mgl_filter);
+    self.rawLayer->setFilter(predicate ? predicate.mgl_filter : mbgl::style::NullFilter());
 }
 
 - (NSPredicate *)predicate
@@ -90,249 +87,463 @@ namespace mbgl {
     return [NSPredicate mgl_predicateWithFilter:self.rawLayer->getFilter()];
 }
 
-#pragma mark - Adding to and removing from a map view
-
-- (void)addToMapView:(MGLMapView *)mapView belowLayer:(MGLStyleLayer *)otherLayer
-{
-    if (_pendingLayer == nullptr) {
-        [NSException raise:@"MGLRedundantLayerException"
-            format:@"This instance %@ was already added to %@. Adding the same layer instance " \
-                    "to the style more than once is invalid.", self, mapView.style];
-    }
-
-    if (otherLayer) {
-        const mbgl::optional<std::string> belowLayerId{otherLayer.identifier.UTF8String};
-        mapView.mbglMap->addLayer(std::move(_pendingLayer), belowLayerId);
-    } else {
-        mapView.mbglMap->addLayer(std::move(_pendingLayer));
-    }
-}
-
-- (void)removeFromMapView:(MGLMapView *)mapView
-{
-    _pendingLayer = nullptr;
-    self.rawLayer = nullptr;
-
-    auto removedLayer = mapView.mbglMap->removeLayer(self.identifier.UTF8String);
-    if (!removedLayer) {
-        return;
-    }
-
-    mbgl::style::LineLayer *layer = dynamic_cast<mbgl::style::LineLayer *>(removedLayer.get());
-    if (!layer) {
-        return;
-    }
-
-    removedLayer.release();
-
-    _pendingLayer = std::unique_ptr<mbgl::style::LineLayer>(layer);
-    self.rawLayer = _pendingLayer.get();
-}
-
 #pragma mark - Accessing the Layout Attributes
 
-- (void)setLineCap:(MGLStyleValue<NSValue *> *)lineCap {
+- (void)setLineCap:(NSExpression *)lineCap {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<mbgl::style::LineCapType, NSValue *, mbgl::style::LineCapType, MGLLineCap>().toEnumPropertyValue(lineCap);
+    auto mbglValue = MGLStyleValueTransformer<mbgl::style::LineCapType, NSValue *, mbgl::style::LineCapType, MGLLineCap>().toPropertyValue<mbgl::style::PropertyValue<mbgl::style::LineCapType>>(lineCap);
     self.rawLayer->setLineCap(mbglValue);
 }
 
-- (MGLStyleValue<NSValue *> *)lineCap {
+- (NSExpression *)lineCap {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineCap() ?: self.rawLayer->getDefaultLineCap();
-    return MGLStyleValueTransformer<mbgl::style::LineCapType, NSValue *, mbgl::style::LineCapType, MGLLineCap>().toEnumStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineCap();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineCap();
+    }
+    return MGLStyleValueTransformer<mbgl::style::LineCapType, NSValue *, mbgl::style::LineCapType, MGLLineCap>().toExpression(propertyValue);
 }
 
-- (void)setLineJoin:(MGLStyleValue<NSValue *> *)lineJoin {
+- (void)setLineJoin:(NSExpression *)lineJoin {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<mbgl::style::LineJoinType, NSValue *, mbgl::style::LineJoinType, MGLLineJoin>().toEnumPropertyValue(lineJoin);
+    auto mbglValue = MGLStyleValueTransformer<mbgl::style::LineJoinType, NSValue *, mbgl::style::LineJoinType, MGLLineJoin>().toPropertyValue<mbgl::style::DataDrivenPropertyValue<mbgl::style::LineJoinType>>(lineJoin);
     self.rawLayer->setLineJoin(mbglValue);
 }
 
-- (MGLStyleValue<NSValue *> *)lineJoin {
+- (NSExpression *)lineJoin {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineJoin() ?: self.rawLayer->getDefaultLineJoin();
-    return MGLStyleValueTransformer<mbgl::style::LineJoinType, NSValue *, mbgl::style::LineJoinType, MGLLineJoin>().toEnumStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineJoin();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineJoin();
+    }
+    return MGLStyleValueTransformer<mbgl::style::LineJoinType, NSValue *, mbgl::style::LineJoinType, MGLLineJoin>().toExpression(propertyValue);
 }
 
-- (void)setLineMiterLimit:(MGLStyleValue<NSNumber *> *)lineMiterLimit {
+- (void)setLineMiterLimit:(NSExpression *)lineMiterLimit {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue(lineMiterLimit);
+    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue<mbgl::style::PropertyValue<float>>(lineMiterLimit);
     self.rawLayer->setLineMiterLimit(mbglValue);
 }
 
-- (MGLStyleValue<NSNumber *> *)lineMiterLimit {
+- (NSExpression *)lineMiterLimit {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineMiterLimit() ?: self.rawLayer->getDefaultLineMiterLimit();
-    return MGLStyleValueTransformer<float, NSNumber *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineMiterLimit();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineMiterLimit();
+    }
+    return MGLStyleValueTransformer<float, NSNumber *>().toExpression(propertyValue);
 }
 
-- (void)setLineRoundLimit:(MGLStyleValue<NSNumber *> *)lineRoundLimit {
+- (void)setLineRoundLimit:(NSExpression *)lineRoundLimit {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue(lineRoundLimit);
+    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue<mbgl::style::PropertyValue<float>>(lineRoundLimit);
     self.rawLayer->setLineRoundLimit(mbglValue);
 }
 
-- (MGLStyleValue<NSNumber *> *)lineRoundLimit {
+- (NSExpression *)lineRoundLimit {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineRoundLimit() ?: self.rawLayer->getDefaultLineRoundLimit();
-    return MGLStyleValueTransformer<float, NSNumber *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineRoundLimit();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineRoundLimit();
+    }
+    return MGLStyleValueTransformer<float, NSNumber *>().toExpression(propertyValue);
 }
 
 #pragma mark - Accessing the Paint Attributes
 
-- (void)setLineBlur:(MGLStyleValue<NSNumber *> *)lineBlur {
+- (void)setLineBlur:(NSExpression *)lineBlur {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue(lineBlur);
+    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue<mbgl::style::DataDrivenPropertyValue<float>>(lineBlur);
     self.rawLayer->setLineBlur(mbglValue);
 }
 
-- (MGLStyleValue<NSNumber *> *)lineBlur {
+- (NSExpression *)lineBlur {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineBlur() ?: self.rawLayer->getDefaultLineBlur();
-    return MGLStyleValueTransformer<float, NSNumber *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineBlur();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineBlur();
+    }
+    return MGLStyleValueTransformer<float, NSNumber *>().toExpression(propertyValue);
 }
 
-- (void)setLineColor:(MGLStyleValue<MGLColor *> *)lineColor {
+- (void)setLineBlurTransition:(MGLTransition )transition {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<mbgl::Color, MGLColor *>().toPropertyValue(lineColor);
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLineBlurTransition(options);
+}
+
+- (MGLTransition)lineBlurTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLineBlurTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+- (void)setLineColor:(NSExpression *)lineColor {
+    MGLAssertStyleLayerIsValid();
+
+    auto mbglValue = MGLStyleValueTransformer<mbgl::Color, MGLColor *>().toPropertyValue<mbgl::style::DataDrivenPropertyValue<mbgl::Color>>(lineColor);
     self.rawLayer->setLineColor(mbglValue);
 }
 
-- (MGLStyleValue<MGLColor *> *)lineColor {
+- (NSExpression *)lineColor {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineColor() ?: self.rawLayer->getDefaultLineColor();
-    return MGLStyleValueTransformer<mbgl::Color, MGLColor *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineColor();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineColor();
+    }
+    return MGLStyleValueTransformer<mbgl::Color, MGLColor *>().toExpression(propertyValue);
 }
 
-- (void)setLineDashPattern:(MGLStyleValue<NSArray<NSNumber *> *> *)lineDashPattern {
+- (void)setLineColorTransition:(MGLTransition )transition {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<std::vector<float>, NSArray<NSNumber *> *, float>().toPropertyValue(lineDashPattern);
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLineColorTransition(options);
+}
+
+- (MGLTransition)lineColorTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLineColorTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+- (void)setLineDashPattern:(NSExpression *)lineDashPattern {
+    MGLAssertStyleLayerIsValid();
+
+    auto mbglValue = MGLStyleValueTransformer<std::vector<float>, NSArray<NSNumber *> *, float>().toPropertyValue<mbgl::style::PropertyValue<std::vector<float>>>(lineDashPattern);
     self.rawLayer->setLineDasharray(mbglValue);
 }
 
-- (MGLStyleValue<NSArray<NSNumber *> *> *)lineDashPattern {
+- (NSExpression *)lineDashPattern {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineDasharray() ?: self.rawLayer->getDefaultLineDasharray();
-    return MGLStyleValueTransformer<std::vector<float>, NSArray<NSNumber *> *, float>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineDasharray();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineDasharray();
+    }
+    return MGLStyleValueTransformer<std::vector<float>, NSArray<NSNumber *> *, float>().toExpression(propertyValue);
 }
 
-
-- (void)setLineDasharray:(MGLStyleValue<NSArray<NSNumber *> *> *)lineDasharray {
-    NSAssert(NO, @"Use -setLineDashPattern: instead.");
-}
-
-- (void)setLineGapWidth:(MGLStyleValue<NSNumber *> *)lineGapWidth {
+- (void)setLineDashPatternTransition:(MGLTransition )transition {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue(lineGapWidth);
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLineDasharrayTransition(options);
+}
+
+- (MGLTransition)lineDashPatternTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLineDasharrayTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+- (void)setLineDasharray:(NSExpression *)lineDasharray {
+}
+
+- (NSExpression *)lineDasharray {
+    return self.lineDashPattern;
+}
+
+- (void)setLineGapWidth:(NSExpression *)lineGapWidth {
+    MGLAssertStyleLayerIsValid();
+
+    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue<mbgl::style::DataDrivenPropertyValue<float>>(lineGapWidth);
     self.rawLayer->setLineGapWidth(mbglValue);
 }
 
-- (MGLStyleValue<NSNumber *> *)lineGapWidth {
+- (NSExpression *)lineGapWidth {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineGapWidth() ?: self.rawLayer->getDefaultLineGapWidth();
-    return MGLStyleValueTransformer<float, NSNumber *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineGapWidth();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineGapWidth();
+    }
+    return MGLStyleValueTransformer<float, NSNumber *>().toExpression(propertyValue);
 }
 
-- (void)setLineOffset:(MGLStyleValue<NSNumber *> *)lineOffset {
+- (void)setLineGapWidthTransition:(MGLTransition )transition {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue(lineOffset);
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLineGapWidthTransition(options);
+}
+
+- (MGLTransition)lineGapWidthTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLineGapWidthTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+- (void)setLineOffset:(NSExpression *)lineOffset {
+    MGLAssertStyleLayerIsValid();
+
+    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue<mbgl::style::DataDrivenPropertyValue<float>>(lineOffset);
     self.rawLayer->setLineOffset(mbglValue);
 }
 
-- (MGLStyleValue<NSNumber *> *)lineOffset {
+- (NSExpression *)lineOffset {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineOffset() ?: self.rawLayer->getDefaultLineOffset();
-    return MGLStyleValueTransformer<float, NSNumber *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineOffset();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineOffset();
+    }
+    return MGLStyleValueTransformer<float, NSNumber *>().toExpression(propertyValue);
 }
 
-- (void)setLineOpacity:(MGLStyleValue<NSNumber *> *)lineOpacity {
+- (void)setLineOffsetTransition:(MGLTransition )transition {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue(lineOpacity);
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLineOffsetTransition(options);
+}
+
+- (MGLTransition)lineOffsetTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLineOffsetTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+- (void)setLineOpacity:(NSExpression *)lineOpacity {
+    MGLAssertStyleLayerIsValid();
+
+    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue<mbgl::style::DataDrivenPropertyValue<float>>(lineOpacity);
     self.rawLayer->setLineOpacity(mbglValue);
 }
 
-- (MGLStyleValue<NSNumber *> *)lineOpacity {
+- (NSExpression *)lineOpacity {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineOpacity() ?: self.rawLayer->getDefaultLineOpacity();
-    return MGLStyleValueTransformer<float, NSNumber *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineOpacity();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineOpacity();
+    }
+    return MGLStyleValueTransformer<float, NSNumber *>().toExpression(propertyValue);
 }
 
-- (void)setLinePattern:(MGLStyleValue<NSString *> *)linePattern {
+- (void)setLineOpacityTransition:(MGLTransition )transition {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<std::string, NSString *>().toPropertyValue(linePattern);
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLineOpacityTransition(options);
+}
+
+- (MGLTransition)lineOpacityTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLineOpacityTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+- (void)setLinePattern:(NSExpression *)linePattern {
+    MGLAssertStyleLayerIsValid();
+
+    auto mbglValue = MGLStyleValueTransformer<std::string, NSString *>().toPropertyValue<mbgl::style::PropertyValue<std::string>>(linePattern);
     self.rawLayer->setLinePattern(mbglValue);
 }
 
-- (MGLStyleValue<NSString *> *)linePattern {
+- (NSExpression *)linePattern {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLinePattern() ?: self.rawLayer->getDefaultLinePattern();
-    return MGLStyleValueTransformer<std::string, NSString *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLinePattern();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLinePattern();
+    }
+    return MGLStyleValueTransformer<std::string, NSString *>().toExpression(propertyValue);
 }
 
-- (void)setLineTranslate:(MGLStyleValue<NSValue *> *)lineTranslate {
+- (void)setLinePatternTransition:(MGLTransition )transition {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<std::array<float, 2>, NSValue *>().toPropertyValue(lineTranslate);
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLinePatternTransition(options);
+}
+
+- (MGLTransition)linePatternTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLinePatternTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+- (void)setLineTranslation:(NSExpression *)lineTranslation {
+    MGLAssertStyleLayerIsValid();
+
+    auto mbglValue = MGLStyleValueTransformer<std::array<float, 2>, NSValue *>().toPropertyValue<mbgl::style::PropertyValue<std::array<float, 2>>>(lineTranslation);
     self.rawLayer->setLineTranslate(mbglValue);
 }
 
-- (MGLStyleValue<NSValue *> *)lineTranslate {
+- (NSExpression *)lineTranslation {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineTranslate() ?: self.rawLayer->getDefaultLineTranslate();
-    return MGLStyleValueTransformer<std::array<float, 2>, NSValue *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineTranslate();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineTranslate();
+    }
+    return MGLStyleValueTransformer<std::array<float, 2>, NSValue *>().toExpression(propertyValue);
 }
 
-- (void)setLineTranslateAnchor:(MGLStyleValue<NSValue *> *)lineTranslateAnchor {
+- (void)setLineTranslationTransition:(MGLTransition )transition {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<mbgl::style::TranslateAnchorType, NSValue *, mbgl::style::TranslateAnchorType, MGLLineTranslateAnchor>().toEnumPropertyValue(lineTranslateAnchor);
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLineTranslateTransition(options);
+}
+
+- (MGLTransition)lineTranslationTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLineTranslateTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+- (void)setLineTranslate:(NSExpression *)lineTranslate {
+}
+
+- (NSExpression *)lineTranslate {
+    return self.lineTranslation;
+}
+
+- (void)setLineTranslationAnchor:(NSExpression *)lineTranslationAnchor {
+    MGLAssertStyleLayerIsValid();
+
+    auto mbglValue = MGLStyleValueTransformer<mbgl::style::TranslateAnchorType, NSValue *, mbgl::style::TranslateAnchorType, MGLLineTranslationAnchor>().toPropertyValue<mbgl::style::PropertyValue<mbgl::style::TranslateAnchorType>>(lineTranslationAnchor);
     self.rawLayer->setLineTranslateAnchor(mbglValue);
 }
 
-- (MGLStyleValue<NSValue *> *)lineTranslateAnchor {
+- (NSExpression *)lineTranslationAnchor {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineTranslateAnchor() ?: self.rawLayer->getDefaultLineTranslateAnchor();
-    return MGLStyleValueTransformer<mbgl::style::TranslateAnchorType, NSValue *, mbgl::style::TranslateAnchorType, MGLLineTranslateAnchor>().toEnumStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineTranslateAnchor();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineTranslateAnchor();
+    }
+    return MGLStyleValueTransformer<mbgl::style::TranslateAnchorType, NSValue *, mbgl::style::TranslateAnchorType, MGLLineTranslationAnchor>().toExpression(propertyValue);
 }
 
-- (void)setLineWidth:(MGLStyleValue<NSNumber *> *)lineWidth {
+- (void)setLineTranslateAnchor:(NSExpression *)lineTranslateAnchor {
+}
+
+- (NSExpression *)lineTranslateAnchor {
+    return self.lineTranslationAnchor;
+}
+
+- (void)setLineWidth:(NSExpression *)lineWidth {
     MGLAssertStyleLayerIsValid();
 
-    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue(lineWidth);
+    auto mbglValue = MGLStyleValueTransformer<float, NSNumber *>().toPropertyValue<mbgl::style::DataDrivenPropertyValue<float>>(lineWidth);
     self.rawLayer->setLineWidth(mbglValue);
 }
 
-- (MGLStyleValue<NSNumber *> *)lineWidth {
+- (NSExpression *)lineWidth {
     MGLAssertStyleLayerIsValid();
 
-    auto propertyValue = self.rawLayer->getLineWidth() ?: self.rawLayer->getDefaultLineWidth();
-    return MGLStyleValueTransformer<float, NSNumber *>().toStyleValue(propertyValue);
+    auto propertyValue = self.rawLayer->getLineWidth();
+    if (propertyValue.isUndefined()) {
+        propertyValue = self.rawLayer->getDefaultLineWidth();
+    }
+    return MGLStyleValueTransformer<float, NSNumber *>().toExpression(propertyValue);
 }
 
+- (void)setLineWidthTransition:(MGLTransition )transition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions options { { MGLDurationFromTimeInterval(transition.duration) }, { MGLDurationFromTimeInterval(transition.delay) } };
+    self.rawLayer->setLineWidthTransition(options);
+}
+
+- (MGLTransition)lineWidthTransition {
+    MGLAssertStyleLayerIsValid();
+
+    mbgl::style::TransitionOptions transitionOptions = self.rawLayer->getLineWidthTransition();
+    MGLTransition transition;
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+
+    return transition;
+}
+
+@end
+
+@implementation NSValue (MGLLineStyleLayerAdditions)
+
++ (NSValue *)valueWithMGLLineCap:(MGLLineCap)lineCap {
+    return [NSValue value:&lineCap withObjCType:@encode(MGLLineCap)];
+}
+
+- (MGLLineCap)MGLLineCapValue {
+    MGLLineCap lineCap;
+    [self getValue:&lineCap];
+    return lineCap;
+}
+
++ (NSValue *)valueWithMGLLineJoin:(MGLLineJoin)lineJoin {
+    return [NSValue value:&lineJoin withObjCType:@encode(MGLLineJoin)];
+}
+
+- (MGLLineJoin)MGLLineJoinValue {
+    MGLLineJoin lineJoin;
+    [self getValue:&lineJoin];
+    return lineJoin;
+}
+
++ (NSValue *)valueWithMGLLineTranslationAnchor:(MGLLineTranslationAnchor)lineTranslationAnchor {
+    return [NSValue value:&lineTranslationAnchor withObjCType:@encode(MGLLineTranslationAnchor)];
+}
+
+- (MGLLineTranslationAnchor)MGLLineTranslationAnchorValue {
+    MGLLineTranslationAnchor lineTranslationAnchor;
+    [self getValue:&lineTranslationAnchor];
+    return lineTranslationAnchor;
+}
 
 @end

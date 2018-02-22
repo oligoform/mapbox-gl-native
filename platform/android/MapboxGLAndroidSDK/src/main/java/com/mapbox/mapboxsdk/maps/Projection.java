@@ -6,6 +6,7 @@ import android.support.annotation.NonNull;
 
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.geometry.LatLngBounds;
+import com.mapbox.mapboxsdk.geometry.ProjectedMeters;
 import com.mapbox.mapboxsdk.geometry.VisibleRegion;
 
 /**
@@ -45,6 +46,20 @@ public class Projection {
   }
 
   /**
+   * Returns the spherical Mercator projected meters for a LatLng.
+   */
+  public ProjectedMeters getProjectedMetersForLatLng(LatLng latLng) {
+    return nativeMapView.projectedMetersForLatLng(latLng);
+  }
+
+  /**
+   * Returns the LatLng for a spherical Mercator projected meters.
+   */
+  public LatLng getLatLngForProjectedMeters(ProjectedMeters projectedMeters) {
+    return nativeMapView.latLngForProjectedMeters(projectedMeters);
+  }
+
+  /**
    * <p>
    * Returns the distance spanned by one pixel at the specified latitude and current zoom level.
    * </p>
@@ -78,24 +93,24 @@ public class Projection {
    * @return The projection of the viewing frustum in its current state.
    */
   public VisibleRegion getVisibleRegion() {
-    LatLngBounds.Builder builder = new LatLngBounds.Builder();
-
-    float left = contentPadding[0];
-    float right = nativeMapView.getWidth() - contentPadding[2];
-    float top = contentPadding[1];
-    float bottom = nativeMapView.getHeight() - contentPadding[3];
+    float left = 0;
+    float right = nativeMapView.getWidth();
+    float top = 0;
+    float bottom = nativeMapView.getHeight();
 
     LatLng topLeft = fromScreenLocation(new PointF(left, top));
     LatLng topRight = fromScreenLocation(new PointF(right, top));
     LatLng bottomRight = fromScreenLocation(new PointF(right, bottom));
     LatLng bottomLeft = fromScreenLocation(new PointF(left, bottom));
 
-    builder.include(topLeft)
-      .include(topRight)
-      .include(bottomRight)
-      .include(bottomLeft);
-
-    return new VisibleRegion(topLeft, topRight, bottomLeft, bottomRight, builder.build());
+    return new VisibleRegion(topLeft, topRight, bottomLeft, bottomRight,
+      new LatLngBounds.Builder()
+        .include(topRight)
+        .include(bottomLeft)
+        .include(bottomRight)
+        .include(topLeft)
+        .build()
+    );
   }
 
   /**
@@ -116,5 +131,15 @@ public class Projection {
 
   float getWidth() {
     return nativeMapView.getWidth();
+  }
+
+  /**
+   * Calculates a zoom level based on minimum scale and current scale from MapView
+   *
+   * @param minScale The minimum scale to calculate the zoom level.
+   * @return zoom level that fits the MapView.
+   */
+  public double calculateZoom(float minScale) {
+    return nativeMapView.getZoom() + Math.log(minScale) / Math.log(2);
   }
 }

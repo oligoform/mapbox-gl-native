@@ -3,26 +3,24 @@ package com.mapbox.mapboxsdk.testapp.activity.customlayer;
 import android.os.Bundle;
 import android.support.design.widget.FloatingActionButton;
 import android.support.v4.content.ContextCompat;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
-
-import timber.log.Timber;
-
 import android.view.Menu;
 import android.view.MenuItem;
-import android.view.View;
 
 import com.mapbox.mapboxsdk.camera.CameraUpdateFactory;
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.style.layers.CustomLayer;
-import com.mapbox.mapboxsdk.style.layers.NoSuchLayerException;
 import com.mapbox.mapboxsdk.testapp.R;
 import com.mapbox.mapboxsdk.testapp.model.customlayer.ExampleCustomLayer;
 
+/**
+ * Test activity showcasing the Custom Layer API
+ * <p>
+ * Note: experimental API, do not use.
+ * </p>
+ */
 public class CustomLayerActivity extends AppCompatActivity {
 
   private MapboxMap mapboxMap;
@@ -36,48 +34,37 @@ public class CustomLayerActivity extends AppCompatActivity {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_custom_layer);
 
-    setupActionBar();
-
     mapView = (MapView) findViewById(R.id.mapView);
     mapView.onCreate(savedInstanceState);
-    mapView.getMapAsync(new OnMapReadyCallback() {
-      @Override
-      public void onMapReady(MapboxMap map) {
-        mapboxMap = map;
-        mapboxMap.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(39.91448, -243.60947), 10));
+    mapView.getMapAsync(map -> {
+      mapboxMap = map;
+      mapboxMap.moveCamera(CameraUpdateFactory.newLatLngZoom(new LatLng(39.91448, -243.60947), 10));
 
-      }
     });
 
     fab = (FloatingActionButton) findViewById(R.id.fab);
     fab.setColorFilter(ContextCompat.getColor(this, R.color.primary));
-    fab.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View view) {
-        if (mapboxMap != null) {
-          swapCustomLayer();
-        }
+    fab.setOnClickListener(view -> {
+      if (mapboxMap != null) {
+        swapCustomLayer();
       }
     });
   }
 
   private void swapCustomLayer() {
     if (customLayer != null) {
-      try {
-        mapboxMap.removeLayer(customLayer.getId());
-        customLayer = null;
-      } catch (NoSuchLayerException noSuchLayerException) {
-        Timber.e("No custom layer to remove");
-      }
-      fab.setImageResource(R.drawable.ic_layers_24dp);
+      mapboxMap.removeLayer(customLayer);
+      customLayer = null;
+      fab.setImageResource(R.drawable.ic_layers);
     } else {
       customLayer = new CustomLayer("custom",
         ExampleCustomLayer.createContext(),
         ExampleCustomLayer.InitializeFunction,
         ExampleCustomLayer.RenderFunction,
+        ExampleCustomLayer.ContextLostFunction, // Optional
         ExampleCustomLayer.DeinitializeFunction);
-      mapboxMap.addLayer(customLayer, "building");
-      fab.setImageResource(R.drawable.ic_layers_clear_24dp);
+      mapboxMap.addLayerBelow(customLayer, "building");
+      fab.setImageResource(R.drawable.ic_layers_clear);
     }
   }
 
@@ -138,9 +125,6 @@ public class CustomLayerActivity extends AppCompatActivity {
   @Override
   public boolean onOptionsItemSelected(MenuItem item) {
     switch (item.getItemId()) {
-      case android.R.id.home:
-        onBackPressed();
-        return true;
       case R.id.action_update_layer:
         updateLayer();
         return true;
@@ -155,17 +139,6 @@ public class CustomLayerActivity extends AppCompatActivity {
         return true;
       default:
         return super.onOptionsItemSelected(item);
-    }
-  }
-
-  private void setupActionBar() {
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    final ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
     }
   }
 }

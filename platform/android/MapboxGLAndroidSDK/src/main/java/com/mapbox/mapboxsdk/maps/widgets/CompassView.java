@@ -1,20 +1,17 @@
 package com.mapbox.mapboxsdk.maps.widgets;
 
 import android.content.Context;
+import android.graphics.drawable.Drawable;
 import android.support.annotation.NonNull;
-import android.support.v4.content.ContextCompat;
 import android.support.v4.view.ViewCompat;
 import android.support.v4.view.ViewPropertyAnimatorCompat;
 import android.support.v4.view.ViewPropertyAnimatorListenerAdapter;
+import android.support.v7.widget.AppCompatImageView;
 import android.util.AttributeSet;
 import android.view.View;
 import android.view.ViewGroup;
-import android.widget.ImageView;
 
-import com.mapbox.mapboxsdk.R;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-
-import java.lang.ref.WeakReference;
 
 /**
  * UI element overlaid on a map to show the map's bearing when it isn't true north (0.0). Tapping
@@ -25,15 +22,17 @@ import java.lang.ref.WeakReference;
  * use {@link com.mapbox.mapboxsdk.maps.UiSettings}.
  * </p>
  */
-public final class CompassView extends ImageView implements Runnable {
+public final class CompassView extends AppCompatImageView implements Runnable {
 
-  private static final long TIME_WAIT_IDLE = 500;
+  public static final long TIME_WAIT_IDLE = 500;
+  public static final long TIME_MAP_NORTH_ANIMATION = 150;
   private static final long TIME_FADE_ANIMATION = TIME_WAIT_IDLE;
-  private static final long TIME_MAP_NORTH_ANIMATION = 150;
 
-  private double direction = 0.0;
+  private float rotation = 0.0f;
   private boolean fadeCompassViewFacingNorth = true;
   private ViewPropertyAnimatorCompat fadeAnimator;
+  private MapboxMap.OnCompassAnimationListener compassAnimationListener;
+  private boolean isAnimating = false;
 
   public CompassView(Context context) {
     super(context);
@@ -51,8 +50,6 @@ public final class CompassView extends ImageView implements Runnable {
   }
 
   private void initialize(Context context) {
-    setImageDrawable(ContextCompat.getDrawable(getContext(), R.drawable.mapbox_compass_icon));
-    setContentDescription(getResources().getString(R.string.mapbox_compassContentDescription));
     setEnabled(false);
 
     // Layout params
@@ -61,9 +58,12 @@ public final class CompassView extends ImageView implements Runnable {
     setLayoutParams(lp);
   }
 
-  // TODO refactor MapboxMap and replace with interface
-  public void setMapboxMap(@NonNull MapboxMap mapboxMap) {
-    setOnClickListener(new CompassClickListener(mapboxMap, this));
+  public void injectCompassAnimationListener(@NonNull MapboxMap.OnCompassAnimationListener compassAnimationListener) {
+    this.compassAnimationListener = compassAnimationListener;
+  }
+
+  public void isAnimating(boolean isAnimating) {
+    this.isAnimating = isAnimating;
   }
 
   private void resetAnimation() {
@@ -78,8 +78,8 @@ public final class CompassView extends ImageView implements Runnable {
   }
 
   public boolean isFacingNorth() {
-    // increase range more than just 0.0
-    return direction >= 359.0 || direction <= 1.0;
+    // increase range of facing north to more than only 0.0
+    return Math.abs(rotation) >= 359.0 || Math.abs(rotation) <= 1.0;
   }
 
   @Override
@@ -96,8 +96,13 @@ public final class CompassView extends ImageView implements Runnable {
     }
   }
 
-  public void update(final double direction) {
-    this.direction = direction;
+  /**
+   * Updates the direction of the compass.
+   *
+   * @param bearing the direction value of the map
+   */
+  public void update(final double bearing) {
+    rotation = (float) bearing;
 
     if (!isEnabled()) {
       return;
@@ -115,7 +120,8 @@ public final class CompassView extends ImageView implements Runnable {
       setVisibility(View.VISIBLE);
     }
 
-    setRotation((float) direction);
+    notifyCompassAnimationListenerWhenAnimating();
+    setRotation(rotation);
   }
 
   public void fadeCompassViewFacingNorth(boolean compassFadeFacingNorth) {
@@ -126,9 +132,28 @@ public final class CompassView extends ImageView implements Runnable {
     return fadeCompassViewFacingNorth;
   }
 
+  /**
+   * Set the CompassView image.
+   *
+   * @param compass the drawable to use as compass image
+   */
+  public void setCompassImage(Drawable compass) {
+    setImageDrawable(compass);
+  }
+
+  /**
+   * Get the current configured CompassView image.
+   *
+   * @return the drawable used as compass image
+   */
+  public Drawable getCompassImage() {
+    return getDrawable();
+  }
+
   @Override
   public void run() {
-    if (isFacingNorth() && fadeCompassViewFacingNorth) {
+    if (isHidden()) {
+      compassAnimationListener.onCompassAnimationFinished();
       resetAnimation();
       setLayerType(View.LAYER_TYPE_HARDWARE, null);
       fadeAnimator = ViewCompat.animate(CompassView.this).alpha(0.0f).setDuration(TIME_FADE_ANIMATION);
@@ -143,24 +168,9 @@ public final class CompassView extends ImageView implements Runnable {
     }
   }
 
-  static class CompassClickListener implements View.OnClickListener {
-
-    private WeakReference<MapboxMap> mapboxMap;
-    private WeakReference<CompassView> compassView;
-
-    CompassClickListener(final MapboxMap mapboxMap, CompassView compassView) {
-      this.mapboxMap = new WeakReference<>(mapboxMap);
-      this.compassView = new WeakReference<>(compassView);
-    }
-
-    @Override
-    public void onClick(View view) {
-      final MapboxMap mapboxMap = this.mapboxMap.get();
-      final CompassView compassView = this.compassView.get();
-      if (mapboxMap != null && compassView != null) {
-        mapboxMap.resetNorth();
-        compassView.postDelayed(compassView, TIME_WAIT_IDLE + TIME_MAP_NORTH_ANIMATION);
-      }
+  private void notifyCompassAnimationListenerWhenAnimating() {
+    if (isAnimating) {
+      compassAnimationListener.onCompassAnimation();
     }
   }
 }

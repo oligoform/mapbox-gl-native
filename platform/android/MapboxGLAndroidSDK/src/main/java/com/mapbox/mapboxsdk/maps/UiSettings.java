@@ -5,13 +5,15 @@ import android.content.pm.PackageManager;
 import android.content.res.Resources;
 import android.graphics.Color;
 import android.graphics.PointF;
+import android.graphics.drawable.Drawable;
+import android.os.Build;
 import android.os.Bundle;
 import android.support.annotation.ColorInt;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.annotation.UiThread;
 import android.support.v4.content.ContextCompat;
-import android.view.Gravity;
+import android.support.v4.content.res.ResourcesCompat;
 import android.view.View;
 import android.widget.FrameLayout;
 import android.widget.ImageView;
@@ -20,6 +22,7 @@ import com.mapbox.mapboxsdk.R;
 import com.mapbox.mapboxsdk.camera.CameraPosition;
 import com.mapbox.mapboxsdk.constants.MapboxConstants;
 import com.mapbox.mapboxsdk.maps.widgets.CompassView;
+import com.mapbox.mapboxsdk.utils.BitmapUtils;
 import com.mapbox.mapboxsdk.utils.ColorUtils;
 
 /**
@@ -30,8 +33,15 @@ public final class UiSettings {
   private final FocalPointChangeListener focalPointChangeListener;
   private final Projection projection;
   private final CompassView compassView;
+  private final int[] compassMargins = new int[4];
+
   private final ImageView attributionsView;
+  private final int[] attributionsMargins = new int[4];
+  private AttributionDialogManager attributionDialogManager;
+
   private final View logoView;
+  private final int[] logoMargins = new int[4];
+
   private float pixelRatio;
 
   private boolean rotateGesturesEnabled = true;
@@ -47,6 +57,9 @@ public final class UiSettings {
   private boolean scrollGestureChangeAllowed = true;
 
   private boolean zoomControlsEnabled;
+
+  private boolean doubleTapGesturesEnabled = true;
+  private boolean doubleTapGestureChangeAllowed = true;
 
   private boolean deselectMarkersOnTap = true;
 
@@ -79,6 +92,8 @@ public final class UiSettings {
     saveLogo(outState);
     saveAttribution(outState);
     saveZoomControl(outState);
+    saveDeselectMarkersOnTap(outState);
+    saveFocalPoint(outState);
   }
 
   void onRestoreInstanceState(@NonNull Bundle savedInstanceState) {
@@ -87,6 +102,8 @@ public final class UiSettings {
     restoreLogo(savedInstanceState);
     restoreAttribution(savedInstanceState);
     restoreZoomControl(savedInstanceState);
+    restoreDeselectMarkersOnTap(savedInstanceState);
+    restoreFocalPoint(savedInstanceState);
   }
 
   private void initialiseGestures(MapboxMapOptions options) {
@@ -99,6 +116,8 @@ public final class UiSettings {
     setTiltGesturesEnabled(options.getTiltGesturesEnabled());
     setTiltGestureChangeAllowed(options.getTiltGesturesEnabled());
     setZoomControlsEnabled(options.getZoomControlsEnabled());
+    setDoubleTapGesturesEnabled(options.getDoubleTapGesturesEnabled());
+    setDoubleTapGestureChangeAllowed(options.getDoubleTapGesturesEnabled());
   }
 
   private void saveGestures(Bundle outState) {
@@ -110,6 +129,8 @@ public final class UiSettings {
     outState.putBoolean(MapboxConstants.STATE_ROTATE_ENABLED_CHANGE, isRotateGestureChangeAllowed());
     outState.putBoolean(MapboxConstants.STATE_TILT_ENABLED, isTiltGesturesEnabled());
     outState.putBoolean(MapboxConstants.STATE_TILT_ENABLED_CHANGE, isTiltGestureChangeAllowed());
+    outState.putBoolean(MapboxConstants.STATE_DOUBLE_TAP_ENABLED, isDoubleTapGesturesEnabled());
+    outState.putBoolean(MapboxConstants.STATE_DOUBLE_TAP_ENABLED_CHANGE, isDoubleTapGestureChangeAllowed());
   }
 
   private void restoreGestures(Bundle savedInstanceState) {
@@ -121,6 +142,8 @@ public final class UiSettings {
     setRotateGestureChangeAllowed(savedInstanceState.getBoolean(MapboxConstants.STATE_ROTATE_ENABLED_CHANGE));
     setTiltGesturesEnabled(savedInstanceState.getBoolean(MapboxConstants.STATE_TILT_ENABLED));
     setTiltGestureChangeAllowed(savedInstanceState.getBoolean(MapboxConstants.STATE_TILT_ENABLED_CHANGE));
+    setDoubleTapGesturesEnabled(savedInstanceState.getBoolean(MapboxConstants.STATE_DOUBLE_TAP_ENABLED));
+    setDoubleTapGestureChangeAllowed(savedInstanceState.getBoolean(MapboxConstants.STATE_DOUBLE_TAP_ENABLED_CHANGE));
   }
 
   private void initialiseCompass(MapboxMapOptions options, Resources resources) {
@@ -130,10 +153,14 @@ public final class UiSettings {
     if (compassMargins != null) {
       setCompassMargins(compassMargins[0], compassMargins[1], compassMargins[2], compassMargins[3]);
     } else {
-      int tenDp = (int) resources.getDimension(R.dimen.mapbox_ten_dp);
+      int tenDp = (int) resources.getDimension(R.dimen.mapbox_four_dp);
       setCompassMargins(tenDp, tenDp, tenDp, tenDp);
     }
     setCompassFadeFacingNorth(options.getCompassFadeFacingNorth());
+    if (options.getCompassImage() == null) {
+      options.compassImage(ResourcesCompat.getDrawable(resources, R.drawable.mapbox_compass_icon, null));
+    }
+    setCompassImage(options.getCompassImage());
   }
 
   private void saveCompass(Bundle outState) {
@@ -144,6 +171,8 @@ public final class UiSettings {
     outState.putInt(MapboxConstants.STATE_COMPASS_MARGIN_BOTTOM, getCompassMarginBottom());
     outState.putInt(MapboxConstants.STATE_COMPASS_MARGIN_RIGHT, getCompassMarginRight());
     outState.putBoolean(MapboxConstants.STATE_COMPASS_FADE_WHEN_FACING_NORTH, isCompassFadeWhenFacingNorth());
+    outState.putByteArray(MapboxConstants.STATE_COMPASS_IMAGE_BITMAP,
+      BitmapUtils.getByteArrayFromDrawable(getCompassImage()));
   }
 
   private void restoreCompass(Bundle savedInstanceState) {
@@ -154,17 +183,23 @@ public final class UiSettings {
       savedInstanceState.getInt(MapboxConstants.STATE_COMPASS_MARGIN_RIGHT),
       savedInstanceState.getInt(MapboxConstants.STATE_COMPASS_MARGIN_BOTTOM));
     setCompassFadeFacingNorth(savedInstanceState.getBoolean(MapboxConstants.STATE_COMPASS_FADE_WHEN_FACING_NORTH));
+    setCompassImage(BitmapUtils.getDrawableFromByteArray(
+      compassView.getContext(), savedInstanceState.getByteArray(MapboxConstants.STATE_COMPASS_IMAGE_BITMAP)));
   }
 
   private void initialiseLogo(MapboxMapOptions options, Resources resources) {
     setLogoEnabled(options.getLogoEnabled());
     setLogoGravity(options.getLogoGravity());
-    int[] logoMargins = options.getLogoMargins();
+    setLogoMargins(resources, options.getLogoMargins());
+  }
+
+  private void setLogoMargins(Resources resources, int[] logoMargins) {
     if (logoMargins != null) {
       setLogoMargins(logoMargins[0], logoMargins[1], logoMargins[2], logoMargins[3]);
     } else {
-      int sixteenDp = (int) resources.getDimension(R.dimen.mapbox_sixteen_dp);
-      setLogoMargins(sixteenDp, sixteenDp, sixteenDp, sixteenDp);
+      // user did not specify margins when programmatically creating a map
+      int fourDp = (int) resources.getDimension(R.dimen.mapbox_four_dp);
+      setLogoMargins(fourDp, fourDp, fourDp, fourDp);
     }
   }
 
@@ -187,21 +222,25 @@ public final class UiSettings {
   }
 
   private void initialiseAttribution(Context context, MapboxMapOptions options) {
-    Resources resources = context.getResources();
     setAttributionEnabled(options.getAttributionEnabled());
     setAttributionGravity(options.getAttributionGravity());
-    int[] attributionMargins = options.getAttributionMargins();
-    if (attributionMargins != null) {
-      setAttributionMargins(attributionMargins[0], attributionMargins[1], attributionMargins[2], attributionMargins[3]);
-    } else {
-      int sevenDp = (int) resources.getDimension(R.dimen.mapbox_seven_dp);
-      int seventySixDp = (int) resources.getDimension(R.dimen.mapbox_seventy_six_dp);
-      setAttributionMargins(seventySixDp, sevenDp, sevenDp, sevenDp);
-    }
-
+    setAttributionMargins(context, options.getAttributionMargins());
     int attributionTintColor = options.getAttributionTintColor();
     setAttributionTintColor(attributionTintColor != -1
       ? attributionTintColor : ColorUtils.getPrimaryColor(context));
+  }
+
+  private void setAttributionMargins(Context context, int[] attributionMargins) {
+    if (attributionMargins != null) {
+      setAttributionMargins(attributionMargins[0], attributionMargins[1],
+        attributionMargins[2], attributionMargins[3]);
+    } else {
+      // user did not specify margins when programmatically creating a map
+      Resources resources = context.getResources();
+      int margin = (int) resources.getDimension(R.dimen.mapbox_four_dp);
+      int leftMargin = (int) resources.getDimension(R.dimen.mapbox_ninety_two_dp);
+      setAttributionMargins(leftMargin, margin, margin, margin);
+    }
   }
 
   private void saveAttribution(Bundle outState) {
@@ -267,8 +306,7 @@ public final class UiSettings {
    * </p>
    * By default, the compass is in the top right corner.
    *
-   * @param gravity One of the values from {@link Gravity}.
-   * @see Gravity
+   * @param gravity Android SDK Gravity.
    */
   @UiThread
   public void setCompassGravity(int gravity) {
@@ -285,6 +323,18 @@ public final class UiSettings {
    */
   public void setCompassFadeFacingNorth(boolean compassFadeFacingNorth) {
     compassView.fadeCompassViewFacingNorth(compassFadeFacingNorth);
+  }
+
+  /**
+   * Specifies the CompassView image.
+   * <p>
+   * By default this value is R.drawable.mapbox_compass_icon.
+   * </p>
+   *
+   * @param compass the drawable to show as image compass
+   */
+  public void setCompassImage(Drawable compass) {
+    compassView.setCompassImage(compass);
   }
 
   /**
@@ -316,7 +366,7 @@ public final class UiSettings {
    */
   @UiThread
   public void setCompassMargins(int left, int top, int right, int bottom) {
-    setWidgetMargins(compassView, left, top, right, bottom);
+    setWidgetMargins(compassView, compassMargins, left, top, right, bottom);
   }
 
   /**
@@ -325,7 +375,7 @@ public final class UiSettings {
    * @return The left margin in pixels
    */
   public int getCompassMarginLeft() {
-    return ((FrameLayout.LayoutParams) compassView.getLayoutParams()).leftMargin;
+    return compassMargins[0];
   }
 
   /**
@@ -334,7 +384,7 @@ public final class UiSettings {
    * @return The top margin in pixels
    */
   public int getCompassMarginTop() {
-    return ((FrameLayout.LayoutParams) compassView.getLayoutParams()).topMargin;
+    return compassMargins[1];
   }
 
   /**
@@ -343,7 +393,7 @@ public final class UiSettings {
    * @return The right margin in pixels
    */
   public int getCompassMarginRight() {
-    return ((FrameLayout.LayoutParams) compassView.getLayoutParams()).rightMargin;
+    return compassMargins[2];
   }
 
   /**
@@ -352,7 +402,16 @@ public final class UiSettings {
    * @return The bottom margin in pixels
    */
   public int getCompassMarginBottom() {
-    return ((FrameLayout.LayoutParams) compassView.getLayoutParams()).bottomMargin;
+    return compassMargins[3];
+  }
+
+  /**
+   * Get the current configured CompassView image.
+   *
+   * @return the drawable used as compass image
+   */
+  public Drawable getCompassImage() {
+    return compassView.getCompassImage();
   }
 
   void update(@NonNull CameraPosition cameraPosition) {
@@ -360,7 +419,8 @@ public final class UiSettings {
       return;
     }
 
-    compassView.update(cameraPosition.bearing);
+    double clockwiseBearing = -cameraPosition.bearing;
+    compassView.update(clockwiseBearing);
   }
 
   /**
@@ -391,8 +451,7 @@ public final class UiSettings {
    * </p>
    * By default, the logo is in the bottom left corner.
    *
-   * @param gravity One of the values from {@link Gravity}.
-   * @see Gravity
+   * @param gravity Android SDK Gravity.
    */
   public void setLogoGravity(int gravity) {
     setWidgetGravity(logoView, gravity);
@@ -417,7 +476,7 @@ public final class UiSettings {
    * @param bottom The bottom margin in pixels.
    */
   public void setLogoMargins(int left, int top, int right, int bottom) {
-    setWidgetMargins(logoView, left, top, right, bottom);
+    setWidgetMargins(logoView, logoMargins, left, top, right, bottom);
   }
 
   /**
@@ -426,7 +485,7 @@ public final class UiSettings {
    * @return The left margin in pixels
    */
   public int getLogoMarginLeft() {
-    return ((FrameLayout.LayoutParams) logoView.getLayoutParams()).leftMargin;
+    return logoMargins[0];
   }
 
   /**
@@ -435,7 +494,7 @@ public final class UiSettings {
    * @return The top margin in pixels
    */
   public int getLogoMarginTop() {
-    return ((FrameLayout.LayoutParams) logoView.getLayoutParams()).topMargin;
+    return logoMargins[1];
   }
 
   /**
@@ -444,7 +503,7 @@ public final class UiSettings {
    * @return The right margin in pixels
    */
   public int getLogoMarginRight() {
-    return ((FrameLayout.LayoutParams) logoView.getLayoutParams()).rightMargin;
+    return logoMargins[2];
   }
 
   /**
@@ -453,7 +512,7 @@ public final class UiSettings {
    * @return The bottom margin in pixels
    */
   public int getLogoMarginBottom() {
-    return ((FrameLayout.LayoutParams) logoView.getLayoutParams()).bottomMargin;
+    return logoMargins[3];
   }
 
   /**
@@ -477,14 +536,35 @@ public final class UiSettings {
     return attributionsView.getVisibility() == View.VISIBLE;
   }
 
+
+  /**
+   * Set a custom attribution dialog manager.
+   * <p>
+   * Set to null to reset to default behaviour.
+   * </p>
+   *
+   * @param attributionDialogManager the manager class used for showing attribution
+   */
+  public void setAttributionDialogManager(AttributionDialogManager attributionDialogManager) {
+    this.attributionDialogManager = attributionDialogManager;
+  }
+
+  /**
+   * Get the custom attribution dialog manager.
+   *
+   * @return the active manager class used for showing attribution
+   */
+  public AttributionDialogManager getAttributionDialogManager() {
+    return attributionDialogManager;
+  }
+
   /**
    * <p>
    * Sets the gravity of the attribution.
    * </p>
    * By default, the attribution is in the bottom left corner next to the Mapbox logo.
    *
-   * @param gravity One of the values from {@link Gravity}.
-   * @see Gravity
+   * @param gravity Android SDK Gravity.
    */
   public void setAttributionGravity(int gravity) {
     setWidgetGravity(attributionsView, gravity);
@@ -508,7 +588,7 @@ public final class UiSettings {
    * @param bottom The bottom margin in pixels.
    */
   public void setAttributionMargins(int left, int top, int right, int bottom) {
-    setWidgetMargins(attributionsView, left, top, right, bottom);
+    setWidgetMargins(attributionsView, attributionsMargins, left, top, right, bottom);
   }
 
   /**
@@ -535,7 +615,7 @@ public final class UiSettings {
    * @return The left margin in pixels
    */
   public int getAttributionMarginLeft() {
-    return ((FrameLayout.LayoutParams) attributionsView.getLayoutParams()).leftMargin;
+    return attributionsMargins[0];
   }
 
   /**
@@ -544,7 +624,7 @@ public final class UiSettings {
    * @return The top margin in pixels
    */
   public int getAttributionMarginTop() {
-    return ((FrameLayout.LayoutParams) attributionsView.getLayoutParams()).topMargin;
+    return attributionsMargins[1];
   }
 
   /**
@@ -553,7 +633,7 @@ public final class UiSettings {
    * @return The right margin in pixels
    */
   public int getAttributionMarginRight() {
-    return ((FrameLayout.LayoutParams) attributionsView.getLayoutParams()).rightMargin;
+    return attributionsMargins[2];
   }
 
   /**
@@ -562,7 +642,7 @@ public final class UiSettings {
    * @return The bottom margin in pixels
    */
   public int getAttributionMarginBottom() {
-    return ((FrameLayout.LayoutParams) attributionsView.getLayoutParams()).bottomMargin;
+    return attributionsMargins[3];
   }
 
   /**
@@ -696,6 +776,49 @@ public final class UiSettings {
   }
 
   /**
+   * <p>
+   * Changes whether the user may zoom the map with a double tap.
+   * </p>
+   * <p>
+   * This setting controls only user interactions with the map. If you set the value to false,
+   * you may still change the map location programmatically.
+   * </p>
+   * The default value is true.
+   *
+   * @param doubleTapGesturesEnabled If true, zooming with a double tap is enabled.
+   */
+  public void setDoubleTapGesturesEnabled(boolean doubleTapGesturesEnabled) {
+    if (doubleTapGestureChangeAllowed) {
+      this.doubleTapGesturesEnabled = doubleTapGesturesEnabled;
+    }
+  }
+
+  /**
+   * Returns whether the user may zoom the map with a double tap.
+   *
+   * @return If true, zooming with a double tap is enabled.
+   */
+  public boolean isDoubleTapGesturesEnabled() {
+    return doubleTapGesturesEnabled;
+  }
+
+  void setDoubleTapGestureChangeAllowed(boolean doubleTapGestureChangeAllowed) {
+    this.doubleTapGestureChangeAllowed = doubleTapGestureChangeAllowed;
+  }
+
+  boolean isDoubleTapGestureChangeAllowed() {
+    return doubleTapGestureChangeAllowed;
+  }
+
+  private void restoreDeselectMarkersOnTap(Bundle savedInstanceState) {
+    setDeselectMarkersOnTap(savedInstanceState.getBoolean(MapboxConstants.STATE_DESELECT_MARKER_ON_TAP));
+  }
+
+  private void saveDeselectMarkersOnTap(Bundle outState) {
+    outState.putBoolean(MapboxConstants.STATE_DESELECT_MARKER_ON_TAP, isDeselectMarkersOnTap());
+  }
+
+  /**
    * Gets whether the markers are automatically deselected (and therefore, their infowindows
    * closed) when a map tap is detected.
    *
@@ -771,6 +894,18 @@ public final class UiSettings {
     setRotateGesturesEnabled(enabled);
     setTiltGesturesEnabled(enabled);
     setZoomGesturesEnabled(enabled);
+    setDoubleTapGesturesEnabled(enabled);
+  }
+
+  private void saveFocalPoint(Bundle outState) {
+    outState.putParcelable(MapboxConstants.STATE_USER_FOCAL_POINT, getFocalPoint());
+  }
+
+  private void restoreFocalPoint(Bundle savedInstanceState) {
+    PointF pointF = savedInstanceState.getParcelable(MapboxConstants.STATE_USER_FOCAL_POINT);
+    if (pointF != null) {
+      setFocalPoint(pointF);
+    }
   }
 
   /**
@@ -830,7 +965,14 @@ public final class UiSettings {
     view.setLayoutParams(layoutParams);
   }
 
-  private void setWidgetMargins(@NonNull final View view, int left, int top, int right, int bottom) {
+  private void setWidgetMargins(@NonNull final View view, int[] initMargins, int left, int top, int right, int bottom) {
+    // keep state of initially set margins
+    initMargins[0] = left;
+    initMargins[1] = top;
+    initMargins[2] = right;
+    initMargins[3] = bottom;
+
+    // convert initial margins with padding
     int[] contentPadding = projection.getContentPadding();
     FrameLayout.LayoutParams layoutParams = (FrameLayout.LayoutParams) view.getLayoutParams();
     left += contentPadding[0];
@@ -838,6 +980,13 @@ public final class UiSettings {
     right += contentPadding[2];
     bottom += contentPadding[3];
     layoutParams.setMargins(left, top, right, bottom);
+
+    // support RTL
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.JELLY_BEAN_MR1) {
+      layoutParams.setMarginStart(left);
+      layoutParams.setMarginEnd(right);
+    }
+
     view.setLayoutParams(layoutParams);
   }
 }

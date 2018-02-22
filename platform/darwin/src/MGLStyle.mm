@@ -2,40 +2,53 @@
 
 #import "MGLMapView_Private.h"
 #import "MGLStyleLayer.h"
+#import "MGLStyleLayer_Private.h"
 #import "MGLFillStyleLayer.h"
+#import "MGLFillExtrusionStyleLayer.h"
 #import "MGLLineStyleLayer.h"
 #import "MGLCircleStyleLayer.h"
 #import "MGLSymbolStyleLayer.h"
+#import "MGLHeatmapStyleLayer.h"
+#import "MGLHillshadeStyleLayer.h"
 #import "MGLRasterStyleLayer.h"
 #import "MGLBackgroundStyleLayer.h"
 #import "MGLOpenGLStyleLayer.h"
 
-#import "MGLStyle_Private.h"
-#import "MGLStyleLayer_Private.h"
-#import "MGLSource_Private.h"
-
-#import "NSDate+MGLAdditions.h"
-
 #import "MGLSource.h"
+#import "MGLSource_Private.h"
+#import "MGLLight_Private.h"
 #import "MGLTileSource_Private.h"
 #import "MGLVectorSource.h"
+#import "MGLVectorSource_Private.h"
 #import "MGLRasterSource.h"
+#import "MGLRasterDEMSource.h"
 #import "MGLShapeSource.h"
+#import "MGLImageSource.h"
 
 #import "MGLAttributionInfo_Private.h"
 
+#include <mbgl/map/map.hpp>
 #include <mbgl/util/default_styles.hpp>
-#include <mbgl/sprite/sprite_image.hpp>
+#include <mbgl/style/style.hpp>
+#include <mbgl/style/image.hpp>
+#include <mbgl/style/light.hpp>
 #include <mbgl/style/layers/fill_layer.hpp>
+#include <mbgl/style/layers/fill_extrusion_layer.hpp>
 #include <mbgl/style/layers/line_layer.hpp>
 #include <mbgl/style/layers/symbol_layer.hpp>
 #include <mbgl/style/layers/raster_layer.hpp>
+#include <mbgl/style/layers/heatmap_layer.hpp>
+#include <mbgl/style/layers/hillshade_layer.hpp>
 #include <mbgl/style/layers/circle_layer.hpp>
 #include <mbgl/style/layers/background_layer.hpp>
 #include <mbgl/style/layers/custom_layer.hpp>
 #include <mbgl/style/sources/geojson_source.hpp>
 #include <mbgl/style/sources/vector_source.hpp>
 #include <mbgl/style/sources/raster_source.hpp>
+#include <mbgl/style/sources/raster_dem_source.hpp>
+#include <mbgl/style/sources/image_source.hpp>
+
+#import "NSDate+MGLAdditions.h"
 
 #if TARGET_OS_IPHONE
     #import "UIImage+MGLAdditions.h"
@@ -43,19 +56,40 @@
     #import "NSImage+MGLAdditions.h"
 #endif
 
+/**
+ Model class for localization changes.
+ */
+@interface MGLTextLanguage: NSObject
+@property (strong, nonatomic) NSString *originalTextField;
+@property (strong, nonatomic) NSString *updatedTextField;
+
+- (instancetype)initWithTextLanguage:(NSString *)originalTextField updatedTextField:(NSString *)updatedTextField;
+
+@end
+
+@implementation MGLTextLanguage
+- (instancetype)initWithTextLanguage:(NSString *)originalTextField updatedTextField:(NSString *)updatedTextField
+{
+    if (self = [super init]) {
+        _originalTextField = originalTextField;
+        _updatedTextField = updatedTextField;
+    }
+    return self;
+}
+@end
+
 @interface MGLStyle()
 
-@property (nonatomic, readwrite, weak) MGLMapView *mapView;
+@property (nonatomic, readonly, weak) MGLMapView *mapView;
+@property (nonatomic, readonly) mbgl::style::Style *rawStyle;
 @property (readonly, copy, nullable) NSURL *URL;
-@property (nonatomic, readwrite, strong) NS_MUTABLE_DICTIONARY_OF(NSString *, MGLOpenGLStyleLayer *) *openGLLayers;
+@property (nonatomic) NS_MUTABLE_DICTIONARY_OF(NSString *, NS_DICTIONARY_OF(NSObject *, MGLTextLanguage *) *) *localizedLayersByIdentifier;
 
 @end
 
 @implementation MGLStyle
 
 #pragma mark Default style URLs
-
-static_assert(mbgl::util::default_styles::currentVersion == MGLStyleDefaultVersion, "mbgl::util::default_styles::currentVersion and MGLStyleDefaultVersion disagree.");
 
 /// @param name The style’s marketing name, written in lower camelCase.
 /// @param fileName The last path component in the style’s URL, excluding the version suffix.
@@ -64,17 +98,13 @@ static_assert(mbgl::util::default_styles::currentVersion == MGLStyleDefaultVersi
     + (NSURL *)name##StyleURL { \
         static dispatch_once_t onceToken; \
         dispatch_once(&onceToken, ^{ \
-            MGLStyleURL_##name = [self name##StyleURLWithVersion:8]; \
+            MGLStyleURL_##name = [self name##StyleURLWithVersion:mbgl::util::default_styles::name.currentVersion]; \
         }); \
         return MGLStyleURL_##name; \
     } \
     \
     + (NSURL *)name##StyleURL##WithVersion:(NSInteger)version { \
-        if (mbgl::util::default_styles::currentVersion == version) { \
-            return [NSURL URLWithString:@(mbgl::util::default_styles::name.url)]; \
-        } else { \
-            return [NSURL URLWithString:[@"mapbox://styles/mapbox/" #fileName "-v" stringByAppendingFormat:@"%li", (long)version]]; \
-        } \
+        return [NSURL URLWithString:[@"mapbox://styles/mapbox/" #fileName "-v" stringByAppendingFormat:@"%li", (long)version]]; \
     }
 
 MGL_DEFINE_STYLE(streets, streets)
@@ -86,7 +116,7 @@ MGL_DEFINE_STYLE(satelliteStreets, satellite-streets)
 
 // Make sure all the styles listed in mbgl::util::default_styles::orderedStyles
 // are defined above and also declared in MGLStyle.h.
-static_assert(6 == mbgl::util::default_styles::numOrderedStyles,
+static_assert(8 == mbgl::util::default_styles::numOrderedStyles,
               "mbgl::util::default_styles::orderedStyles and MGLStyle have different numbers of styles.");
 
 // Hybrid has been renamed Satellite Streets, so the last Hybrid version is hard-coded here.
@@ -109,30 +139,60 @@ static NSURL *MGLStyleURL_emerald;
     return MGLStyleURL_emerald;
 }
 
+// Traffic Day is no longer getting new versions as a default style, so the current version is hard-coded here.
+static NSURL *MGLStyleURL_trafficDay;
++ (NSURL *)trafficDayStyleURL {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        MGLStyleURL_trafficDay = [NSURL URLWithString:@"mapbox://styles/mapbox/traffic-day-v2"];
+    });
+    return MGLStyleURL_trafficDay;
+}
+
++ (NSURL *)trafficDayStyleURLWithVersion:(NSInteger)version {
+    return [NSURL URLWithString:[@"mapbox://styles/mapbox/traffic-day-v" stringByAppendingFormat:@"%li", (long)version]];
+}
+
+// Traffic Night is no longer getting new versions as a default style, so the current version is hard-coded here.
+static NSURL *MGLStyleURL_trafficNight;
++ (NSURL *)trafficNightStyleURL {
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        MGLStyleURL_trafficNight = [NSURL URLWithString:@"mapbox://styles/mapbox/traffic-night-v2"];
+    });
+    return MGLStyleURL_trafficNight;
+}
+
++ (NSURL *)trafficNightStyleURLWithVersion:(NSInteger)version {
+    return [NSURL URLWithString:[@"mapbox://styles/mapbox/traffic-night-v" stringByAppendingFormat:@"%li", (long)version]];
+}
+
+
 #pragma mark -
 
-- (instancetype)initWithMapView:(MGLMapView *)mapView {
+- (instancetype)initWithRawStyle:(mbgl::style::Style *)rawStyle mapView:(MGLMapView *)mapView {
     if (self = [super init]) {
         _mapView = mapView;
-        _openGLLayers = [NSMutableDictionary dictionary];
+        _rawStyle = rawStyle;
+        _localizedLayersByIdentifier = [NSMutableDictionary dictionary];
     }
     return self;
 }
 
 - (NSURL *)URL {
-    return [NSURL URLWithString:@(self.mapView.mbglMap->getStyleURL().c_str())];
+    return [NSURL URLWithString:@(self.rawStyle->getURL().c_str())];
 }
 
 - (NSString *)name {
-    std::string name = self.mapView.mbglMap->getStyleName();
+    std::string name = self.rawStyle->getName();
     return name.empty() ? nil : @(name.c_str());
 }
 
 #pragma mark Sources
 
-- (NS_MUTABLE_SET_OF(MGLSource *) *)sources {
-    auto rawSources = self.mapView.mbglMap->getSources();
-    NSMutableSet *sources = [NSMutableSet setWithCapacity:rawSources.size()];
+- (NS_SET_OF(__kindof MGLSource *) *)sources {
+    auto rawSources = self.rawStyle->getSources();
+    NS_MUTABLE_SET_OF(__kindof MGLSource *) *sources = [NSMutableSet setWithCapacity:rawSources.size()];
     for (auto rawSource = rawSources.begin(); rawSource != rawSources.end(); ++rawSource) {
         MGLSource *source = [self sourceFromMBGLSource:*rawSource];
         [sources addObject:source];
@@ -140,7 +200,7 @@ static NSURL *MGLStyleURL_emerald;
     return sources;
 }
 
-- (void)setSources:(NS_MUTABLE_SET_OF(MGLSource *) *)sources {
+- (void)setSources:(NS_SET_OF(__kindof MGLSource *) *)sources {
     for (MGLSource *source in self.sources) {
         [self removeSource:source];
     }
@@ -150,8 +210,7 @@ static NSURL *MGLStyleURL_emerald;
 }
 
 - (NSUInteger)countOfSources {
-    auto rawSources = self.mapView.mbglMap->getSources();
-    return rawSources.size();
+    return self.rawStyle->getSources().size();
 }
 
 - (MGLSource *)memberOfSources:(MGLSource *)object {
@@ -160,21 +219,30 @@ static NSURL *MGLStyleURL_emerald;
 
 - (MGLSource *)sourceWithIdentifier:(NSString *)identifier
 {
-    auto rawSource = self.mapView.mbglMap->getSource(identifier.UTF8String);
+    auto rawSource = self.rawStyle->getSource(identifier.UTF8String);
+    
     return rawSource ? [self sourceFromMBGLSource:rawSource] : nil;
 }
 
-- (MGLSource *)sourceFromMBGLSource:(mbgl::style::Source *)source {
+- (MGLSource *)sourceFromMBGLSource:(mbgl::style::Source *)rawSource {
+    if (MGLSource *source = rawSource->peer.has_value() ? mbgl::util::any_cast<SourceWrapper>(rawSource->peer).source : nil) {
+        return source;
+    }
+
     // TODO: Fill in options specific to the respective source classes
     // https://github.com/mapbox/mapbox-gl-native/issues/6584
-    if (auto vectorSource = source->as<mbgl::style::VectorSource>()) {
-        return [[MGLVectorSource alloc] initWithRawSource:vectorSource];
-    } else if (auto geoJSONSource = source->as<mbgl::style::GeoJSONSource>()) {
-        return [[MGLShapeSource alloc] initWithRawSource:geoJSONSource];
-    } else if (auto rasterSource = source->as<mbgl::style::RasterSource>()) {
-        return [[MGLRasterSource alloc] initWithRawSource:rasterSource];
+    if (auto vectorSource = rawSource->as<mbgl::style::VectorSource>()) {
+        return [[MGLVectorSource alloc] initWithRawSource:vectorSource mapView:self.mapView];
+    } else if (auto geoJSONSource = rawSource->as<mbgl::style::GeoJSONSource>()) {
+        return [[MGLShapeSource alloc] initWithRawSource:geoJSONSource mapView:self.mapView];
+    } else if (auto rasterSource = rawSource->as<mbgl::style::RasterSource>()) {
+        return [[MGLRasterSource alloc] initWithRawSource:rasterSource mapView:self.mapView];
+    } else if (auto rasterDEMSource = rawSource->as<mbgl::style::RasterDEMSource>()) {
+        return [[MGLRasterDEMSource alloc] initWithRawSource:rasterDEMSource mapView:self.mapView];
+    } else if (auto imageSource = rawSource->as<mbgl::style::ImageSource>()) {
+        return [[MGLImageSource alloc] initWithRawSource:imageSource mapView:self.mapView];
     } else {
-        return [[MGLSource alloc] initWithRawSource:source];
+        return [[MGLSource alloc] initWithRawSource:rawSource mapView:self.mapView];
     }
 }
 
@@ -209,14 +277,14 @@ static NSURL *MGLStyleURL_emerald;
     // It’d be incredibly convenient to use -sources here, but this operation
     // depends on the sources being sorted in ascending order by creation, as
     // with the std::vector used in mbgl.
-    auto rawSources = self.mapView.mbglMap->getSources();
+    auto rawSources = self.rawStyle->getSources();
     NSMutableArray *infos = [NSMutableArray arrayWithCapacity:rawSources.size()];
     for (auto rawSource = rawSources.begin(); rawSource != rawSources.end(); ++rawSource) {
         MGLTileSource *source = (MGLTileSource *)[self sourceFromMBGLSource:*rawSource];
         if (![source isKindOfClass:[MGLTileSource class]]) {
             continue;
         }
-        
+
         NSArray *tileSetInfos = [source attributionInfosWithFontSize:fontSize linkColor:linkColor];
         [infos growArrayByAddingAttributionInfosFromArray:tileSetInfos];
     }
@@ -225,46 +293,46 @@ static NSURL *MGLStyleURL_emerald;
 
 #pragma mark Style layers
 
-- (NS_MUTABLE_ARRAY_OF(MGLStyleLayer *) *)layers
+- (NS_ARRAY_OF(__kindof MGLStyleLayer *) *)layers
 {
-    auto layers = self.mapView.mbglMap->getLayers();
-    NSMutableArray *styleLayers = [NSMutableArray arrayWithCapacity:layers.size()];
-    for (auto layer = layers.rbegin(); layer != layers.rend(); ++layer) {
-        MGLStyleLayer *styleLayer = [self layerFromMBGLLayer:*layer];
+    auto layers = self.rawStyle->getLayers();
+    NS_MUTABLE_ARRAY_OF(__kindof MGLStyleLayer *) *styleLayers = [NSMutableArray arrayWithCapacity:layers.size()];
+    for (auto layer : layers) {
+        MGLStyleLayer *styleLayer = [self layerFromMBGLLayer:layer];
         [styleLayers addObject:styleLayer];
     }
     return styleLayers;
 }
 
-- (void)setLayers:(NS_MUTABLE_ARRAY_OF(MGLStyleLayer *) *)layers {
-    for (MGLStyleLayer *layer in self.layers.reverseObjectEnumerator) {
+- (void)setLayers:(NS_ARRAY_OF(__kindof MGLStyleLayer *) *)layers {
+    for (MGLStyleLayer *layer in self.layers) {
         [self removeLayer:layer];
     }
-    for (MGLStyleLayer *layer in layers.reverseObjectEnumerator) {
+    for (MGLStyleLayer *layer in layers) {
         [self addLayer:layer];
     }
 }
 
 - (NSUInteger)countOfLayers
 {
-    return self.mapView.mbglMap->getLayers().size();
+    return self.rawStyle->getLayers().size();
 }
 
 - (MGLStyleLayer *)objectInLayersAtIndex:(NSUInteger)index
 {
-    auto layers = self.mapView.mbglMap->getLayers();
-    if (index > layers.size() - 1) {
+    auto layers = self.rawStyle->getLayers();
+    if (index >= layers.size()) {
         [NSException raise:NSRangeException
                     format:@"No style layer at index %lu.", (unsigned long)index];
         return nil;
     }
-    auto layer = layers.at(layers.size() - 1 - index);
+    auto layer = layers.at(index);
     return [self layerFromMBGLLayer:layer];
 }
 
 - (void)getLayers:(MGLStyleLayer **)buffer range:(NSRange)inRange
 {
-    auto layers = self.mapView.mbglMap->getLayers();
+    auto layers = self.rawStyle->getLayers();
     if (NSMaxRange(inRange) > layers.size()) {
         [NSException raise:NSRangeException
                     format:@"Style layer range %@ is out of bounds.", NSStringFromRange(inRange)];
@@ -284,20 +352,21 @@ static NSURL *MGLStyleURL_emerald;
          @"Make sure the style layer was created as a member of a concrete subclass of MGLStyleLayer.",
          styleLayer];
     }
-    auto layers = self.mapView.mbglMap->getLayers();
+    auto layers = self.rawStyle->getLayers();
     if (index > layers.size()) {
         [NSException raise:NSRangeException
                     format:@"Cannot insert style layer at out-of-bounds index %lu.", (unsigned long)index];
     } else if (index == 0) {
         try {
-            [styleLayer addToMapView:self.mapView belowLayer:nil];
+            MGLStyleLayer *sibling = layers.size() ? [self layerFromMBGLLayer:layers.at(0)] : nil;
+            [styleLayer addToStyle:self belowLayer:sibling];
         } catch (const std::runtime_error & err) {
             [NSException raise:@"MGLRedundantLayerIdentifierException" format:@"%s", err.what()];
         }
     } else {
         try {
-            MGLStyleLayer *sibling = [self layerFromMBGLLayer:layers.at(layers.size() - index)];
-            [styleLayer addToMapView:self.mapView belowLayer:sibling];
+            MGLStyleLayer *sibling = [self layerFromMBGLLayer:layers.at(index)];
+            [styleLayer addToStyle:self belowLayer:sibling];
         } catch (std::runtime_error & err) {
             [NSException raise:@"MGLRedundantLayerIdentifierException" format:@"%s", err.what()];
         }
@@ -306,59 +375,53 @@ static NSURL *MGLStyleURL_emerald;
 
 - (void)removeObjectFromLayersAtIndex:(NSUInteger)index
 {
-    auto layers = self.mapView.mbglMap->getLayers();
-    if (index > layers.size() - 1) {
+    auto layers = self.rawStyle->getLayers();
+    if (index >= layers.size()) {
         [NSException raise:NSRangeException
                     format:@"Cannot remove style layer at out-of-bounds index %lu.", (unsigned long)index];
     }
-    auto layer = layers.at(layers.size() - 1 - index);
+    auto layer = layers.at(index);
     MGLStyleLayer *styleLayer = [self layerFromMBGLLayer:layer];
-    [styleLayer removeFromMapView:self.mapView];
+    [styleLayer removeFromStyle:self];
 }
 
-- (MGLStyleLayer *)layerFromMBGLLayer:(mbgl::style::Layer *)mbglLayer
+- (MGLStyleLayer *)layerFromMBGLLayer:(mbgl::style::Layer *)rawLayer
 {
-    NSParameterAssert(mbglLayer);
-    
-    NSString *identifier = @(mbglLayer->getID().c_str());
-    MGLStyleLayer *styleLayer;
-    if (auto fillLayer = mbglLayer->as<mbgl::style::FillLayer>()) {
-        MGLSource *source = [self sourceWithIdentifier:@(fillLayer->getSourceID().c_str())];
-        styleLayer = [[MGLFillStyleLayer alloc] initWithIdentifier:identifier source:source];
-    } else if (auto lineLayer = mbglLayer->as<mbgl::style::LineLayer>()) {
-        MGLSource *source = [self sourceWithIdentifier:@(lineLayer->getSourceID().c_str())];
-        styleLayer = [[MGLLineStyleLayer alloc] initWithIdentifier:identifier source:source];
-    } else if (auto symbolLayer = mbglLayer->as<mbgl::style::SymbolLayer>()) {
-        MGLSource *source = [self sourceWithIdentifier:@(symbolLayer->getSourceID().c_str())];
-        styleLayer = [[MGLSymbolStyleLayer alloc] initWithIdentifier:identifier source:source];
-    } else if (auto rasterLayer = mbglLayer->as<mbgl::style::RasterLayer>()) {
-        MGLSource *source = [self sourceWithIdentifier:@(rasterLayer->getSourceID().c_str())];
-        styleLayer = [[MGLRasterStyleLayer alloc] initWithIdentifier:identifier source:source];
-    } else if (auto circleLayer = mbglLayer->as<mbgl::style::CircleLayer>()) {
-        MGLSource *source = [self sourceWithIdentifier:@(circleLayer->getSourceID().c_str())];
-        styleLayer = [[MGLCircleStyleLayer alloc] initWithIdentifier:identifier source:source];
-    } else if (mbglLayer->is<mbgl::style::BackgroundLayer>()) {
-        styleLayer = [[MGLBackgroundStyleLayer alloc] initWithIdentifier:identifier];
-    } else if (auto customLayer = mbglLayer->as<mbgl::style::CustomLayer>()) {
-        styleLayer = self.openGLLayers[identifier];
-        if (styleLayer) {
-            NSAssert(styleLayer.rawLayer == customLayer, @"%@ wraps a CustomLayer that differs from the one associated with the underlying style.", styleLayer);
-            return styleLayer;
-        }
-        styleLayer = [[MGLOpenGLStyleLayer alloc] initWithIdentifier:identifier];
+    NSParameterAssert(rawLayer);
+
+    if (MGLStyleLayer *layer = rawLayer->peer.has_value() ? mbgl::util::any_cast<LayerWrapper>(&(rawLayer->peer))->layer : nil) {
+        return layer;
+    }
+
+    if (auto fillLayer = rawLayer->as<mbgl::style::FillLayer>()) {
+        return [[MGLFillStyleLayer alloc] initWithRawLayer:fillLayer];
+    } else if (auto fillExtrusionLayer = rawLayer->as<mbgl::style::FillExtrusionLayer>()) {
+        return [[MGLFillExtrusionStyleLayer alloc] initWithRawLayer:fillExtrusionLayer];
+    } else if (auto lineLayer = rawLayer->as<mbgl::style::LineLayer>()) {
+        return [[MGLLineStyleLayer alloc] initWithRawLayer:lineLayer];
+    } else if (auto symbolLayer = rawLayer->as<mbgl::style::SymbolLayer>()) {
+        return [[MGLSymbolStyleLayer alloc] initWithRawLayer:symbolLayer];
+    } else if (auto rasterLayer = rawLayer->as<mbgl::style::RasterLayer>()) {
+        return [[MGLRasterStyleLayer alloc] initWithRawLayer:rasterLayer];
+    } else if (auto heatmapLayer = rawLayer->as<mbgl::style::HeatmapLayer>()) {
+        return [[MGLHeatmapStyleLayer alloc] initWithRawLayer:heatmapLayer];
+    } else if (auto hillshadeLayer = rawLayer->as<mbgl::style::HillshadeLayer>()) {
+        return [[MGLHillshadeStyleLayer alloc] initWithRawLayer:hillshadeLayer];
+    } else if (auto circleLayer = rawLayer->as<mbgl::style::CircleLayer>()) {
+        return [[MGLCircleStyleLayer alloc] initWithRawLayer:circleLayer];
+    } else if (auto backgroundLayer = rawLayer->as<mbgl::style::BackgroundLayer>()) {
+        return [[MGLBackgroundStyleLayer alloc] initWithRawLayer:backgroundLayer];
+    } else if (auto customLayer = rawLayer->as<mbgl::style::CustomLayer>()) {
+        return [[MGLOpenGLStyleLayer alloc] initWithRawLayer:customLayer];
     } else {
         NSAssert(NO, @"Unrecognized layer type");
         return nil;
     }
-
-    styleLayer.rawLayer = mbglLayer;
-
-    return styleLayer;
 }
 
 - (MGLStyleLayer *)layerWithIdentifier:(NSString *)identifier
 {
-    auto mbglLayer = self.mapView.mbglMap->getLayer(identifier.UTF8String);
+    auto mbglLayer = self.rawStyle->getLayer(identifier.UTF8String);
     return mbglLayer ? [self layerFromMBGLLayer:mbglLayer] : nil;
 }
 
@@ -371,7 +434,7 @@ static NSURL *MGLStyleURL_emerald;
          layer];
     }
     [self willChangeValueForKey:@"layers"];
-    [layer removeFromMapView:self.mapView];
+    [layer removeFromStyle:self];
     [self didChangeValueForKey:@"layers"];
 }
 
@@ -385,7 +448,7 @@ static NSURL *MGLStyleURL_emerald;
     }
     [self willChangeValueForKey:@"layers"];
     try {
-        [layer addToMapView:self.mapView belowLayer:nil];
+        [layer addToStyle:self belowLayer:nil];
     } catch (std::runtime_error & err) {
         [NSException raise:@"MGLRedundantLayerIdentifierException" format:@"%s", err.what()];
     }
@@ -414,7 +477,7 @@ static NSURL *MGLStyleURL_emerald;
     }
     [self willChangeValueForKey:@"layers"];
     try {
-        [layer addToMapView:self.mapView belowLayer:sibling];
+        [layer addToStyle:self belowLayer:sibling];
     } catch (std::runtime_error & err) {
         [NSException raise:@"MGLRedundantLayerIdentifierException" format:@"%s", err.what()];
     }
@@ -436,8 +499,8 @@ static NSURL *MGLStyleURL_emerald;
          @"Make sure sibling was obtained using -[MGLStyle layerWithIdentifier:].",
          sibling];
     }
-    
-    auto layers = self.mapView.mbglMap->getLayers();
+
+    auto layers = self.rawStyle->getLayers();
     std::string siblingIdentifier = sibling.identifier.UTF8String;
     NSUInteger index = 0;
     for (auto layer : layers) {
@@ -446,7 +509,7 @@ static NSURL *MGLStyleURL_emerald;
         }
         index++;
     }
-    
+
     [self willChangeValueForKey:@"layers"];
     if (index + 1 > layers.size()) {
         [NSException raise:NSInvalidArgumentException
@@ -456,14 +519,14 @@ static NSURL *MGLStyleURL_emerald;
          sibling];
     } else if (index + 1 == layers.size()) {
         try {
-            [layer addToMapView:self.mapView belowLayer:nil];
+            [layer addToStyle:self belowLayer:nil];
         } catch (std::runtime_error & err) {
             [NSException raise:@"MGLRedundantLayerIdentifierException" format:@"%s", err.what()];
         }
     } else {
         MGLStyleLayer *sibling = [self layerFromMBGLLayer:layers.at(index + 1)];
         try {
-            [layer addToMapView:self.mapView belowLayer:sibling];
+            [layer addToStyle:self belowLayer:sibling];
         } catch (std::runtime_error & err) {
             [NSException raise:@"MGLRedundantLayerIdentifierException" format:@"%s", err.what()];
         }
@@ -475,60 +538,32 @@ static NSURL *MGLStyleURL_emerald;
 
 - (NS_ARRAY_OF(NSString *) *)styleClasses
 {
-    const std::vector<std::string> &appliedClasses = self.mapView.mbglMap->getClasses();
-
-    NSMutableArray *returnArray = [NSMutableArray arrayWithCapacity:appliedClasses.size()];
-
-    for (auto appliedClass : appliedClasses) {
-       [returnArray addObject:@(appliedClass.c_str())];
-    }
-
-    return returnArray;
+    return @[];
 }
 
 - (void)setStyleClasses:(NS_ARRAY_OF(NSString *) *)appliedClasses
 {
-    [self setStyleClasses:appliedClasses transitionDuration:0];
 }
 
 - (void)setStyleClasses:(NS_ARRAY_OF(NSString *) *)appliedClasses transitionDuration:(NSTimeInterval)transitionDuration
 {
-    std::vector<std::string> newAppliedClasses;
-
-    for (NSString *appliedClass in appliedClasses)
-    {
-        newAppliedClasses.push_back([appliedClass UTF8String]);
-    }
-
-    mbgl::style::TransitionOptions transition { { MGLDurationInSeconds(transitionDuration) } };
-    self.mapView.mbglMap->setTransitionOptions(transition);
-    self.mapView.mbglMap->setClasses(newAppliedClasses);
 }
 
 - (NSUInteger)countOfStyleClasses {
-    const auto &classes = self.mapView.mbglMap->getClasses();
-    return classes.size();
+    return 0;
 }
 
 - (BOOL)hasStyleClass:(NSString *)styleClass
 {
-    return styleClass && self.mapView.mbglMap->hasClass([styleClass UTF8String]);
+    return NO;
 }
 
 - (void)addStyleClass:(NSString *)styleClass
 {
-    if (styleClass)
-    {
-        self.mapView.mbglMap->addClass([styleClass UTF8String]);
-    }
 }
 
 - (void)removeStyleClass:(NSString *)styleClass
 {
-    if (styleClass)
-    {
-        self.mapView.mbglMap->removeClass([styleClass UTF8String]);
-    }
 }
 
 #pragma mark Style images
@@ -544,7 +579,7 @@ static NSURL *MGLStyleURL_emerald;
                     format:@"Cannot assign image %@ to a nil name.", image];
     }
 
-    self.mapView.mbglMap->addImage([name UTF8String], image.mgl_spriteImage);
+    self.rawStyle->addImage([image mgl_styleImageWithIdentifier:name]);
 }
 
 - (void)removeImageForName:(NSString *)name
@@ -554,7 +589,7 @@ static NSURL *MGLStyleURL_emerald;
                     format:@"Cannot remove image with nil name."];
     }
 
-    self.mapView.mbglMap->removeImage([name UTF8String]);
+    self.rawStyle->removeImage([name UTF8String]);
 }
 
 - (MGLImage *)imageForName:(NSString *)name
@@ -564,8 +599,45 @@ static NSURL *MGLStyleURL_emerald;
                     format:@"Cannot get image with nil name."];
     }
 
-    auto spriteImage = self.mapView.mbglMap->getImage([name UTF8String]);
-    return spriteImage ? [[MGLImage alloc] initWithMGLSpriteImage:spriteImage] : nil;
+    auto styleImage = self.rawStyle->getImage([name UTF8String]);
+    return styleImage ? [[MGLImage alloc] initWithMGLStyleImage:styleImage] : nil;
+}
+
+#pragma mark Style transitions
+
+- (void)setTransition:(MGLTransition)transition
+{
+    auto transitionOptions = self.rawStyle->getTransitionOptions();
+    transitionOptions.duration = MGLDurationFromTimeInterval(transition.duration);
+    transitionOptions.delay = MGLDurationFromTimeInterval(transition.delay);
+    
+    self.rawStyle->setTransitionOptions(transitionOptions);
+}
+
+- (MGLTransition)transition
+{
+    MGLTransition transition;
+    const mbgl::style::TransitionOptions transitionOptions = self.rawStyle->getTransitionOptions();
+
+    transition.delay = MGLTimeIntervalFromDuration(transitionOptions.delay.value_or(mbgl::Duration::zero()));
+    transition.duration = MGLTimeIntervalFromDuration(transitionOptions.duration.value_or(mbgl::Duration::zero()));
+    
+    return transition;
+}
+
+#pragma mark Style light
+
+- (void)setLight:(MGLLight *)light
+{
+    std::unique_ptr<mbgl::style::Light> mbglLight = std::make_unique<mbgl::style::Light>([light mbglLight]);
+    self.rawStyle->setLight(std::move(mbglLight));
+}
+
+- (MGLLight *)light
+{
+    auto mbglLight = self.rawStyle->getLight();
+    MGLLight *light = [[MGLLight alloc] initWithMBGLLight:mbglLight];
+    return light;
 }
 
 - (NSString *)description
@@ -574,6 +646,103 @@ static NSURL *MGLStyleURL_emerald;
             NSStringFromClass([self class]), (void *)self,
             self.name ? [NSString stringWithFormat:@"\"%@\"", self.name] : self.name,
             self.URL ? [NSString stringWithFormat:@"\"%@\"", self.URL] : self.URL];
+}
+
+#pragma mark Mapbox Streets source introspection
+
+- (void)setLocalizesLabels:(BOOL)localizesLabels
+{
+    if (_localizesLabels != localizesLabels) {
+        _localizesLabels = localizesLabels;
+    } else {
+        return;
+    }
+    
+    if (_localizesLabels) {
+        NSString *preferredLanguage = [MGLVectorSource preferredMapboxStreetsLanguage];
+        NSMutableDictionary *localizedKeysByKeyBySourceIdentifier = [NSMutableDictionary dictionary];
+        for (MGLSymbolStyleLayer *layer in self.layers) {
+            if (![layer isKindOfClass:[MGLSymbolStyleLayer class]]) {
+                continue;
+            }
+            
+            MGLVectorSource *source = (MGLVectorSource *)[self sourceWithIdentifier:layer.sourceIdentifier];
+            if (![source isKindOfClass:[MGLVectorSource class]] || !source.mapboxStreets) {
+                continue;
+            }
+            
+            NSDictionary *localizedKeysByKey = localizedKeysByKeyBySourceIdentifier[layer.sourceIdentifier];
+            if (!localizedKeysByKey) {
+                localizedKeysByKey = localizedKeysByKeyBySourceIdentifier[layer.sourceIdentifier] = [source localizedKeysByKeyForPreferredLanguage:preferredLanguage];
+            }
+            
+            NSString *(^stringByLocalizingString)(NSString *) = ^ NSString * (NSString *string) {
+                NSMutableString *localizedString = string.mutableCopy;
+                [localizedKeysByKey enumerateKeysAndObjectsUsingBlock:^(NSString * _Nonnull key, NSString * _Nonnull localizedKey, BOOL * _Nonnull stop) {
+                    NSAssert([key isKindOfClass:[NSString class]], @"key is not a string");
+                    NSAssert([localizedKey isKindOfClass:[NSString class]], @"localizedKey is not a string");
+                    [localizedString replaceOccurrencesOfString:[NSString stringWithFormat:@"{%@}", key]
+                                                     withString:[NSString stringWithFormat:@"{%@}", localizedKey]
+                                                        options:0
+                                                          range:NSMakeRange(0, localizedString.length)];
+                }];
+                return localizedString;
+            };
+            
+            if (layer.text.expressionType == NSConstantValueExpressionType) {
+                NSString *textField = layer.text.constantValue;
+                NSString *localizingString = stringByLocalizingString(textField);
+                if (![textField isEqualToString:localizingString]) {
+                    MGLTextLanguage *textLanguage = [[MGLTextLanguage alloc] initWithTextLanguage:textField
+                                                                                 updatedTextField:localizingString];
+                    [self.localizedLayersByIdentifier setObject:@{ textField : textLanguage } forKey:layer.identifier];
+                    layer.text = [NSExpression expressionForConstantValue:localizingString];
+                }
+            }
+        }
+    } else {
+        
+        [self.localizedLayersByIdentifier enumerateKeysAndObjectsUsingBlock:^(NSString *identifier, NSDictionary<NSObject *, MGLTextLanguage *> *textFields, BOOL *done) {
+            MGLSymbolStyleLayer *layer = (MGLSymbolStyleLayer *)[self.mapView.style layerWithIdentifier:identifier];
+            
+            if (layer.text.expressionType == NSConstantValueExpressionType) {
+                NSString *textField = layer.text.constantValue;
+                [textFields enumerateKeysAndObjectsUsingBlock:^(NSObject *originalLanguage, MGLTextLanguage *textLanguage, BOOL *done) {
+                    if ([textLanguage.updatedTextField isEqualToString:textField]) {
+                        layer.text = [NSExpression expressionForConstantValue:textLanguage.originalTextField];
+                    }
+                }];
+
+            }
+        }];
+
+        self.localizedLayersByIdentifier = [NSMutableDictionary dictionary];
+    }
+}
+
+- (NS_SET_OF(MGLVectorSource *) *)mapboxStreetsSources {
+    return [self.sources objectsPassingTest:^BOOL (__kindof MGLVectorSource * _Nonnull source, BOOL * _Nonnull stop) {
+        return [source isKindOfClass:[MGLVectorSource class]] && source.mapboxStreets;
+    }];
+}
+
+- (NS_ARRAY_OF(MGLStyleLayer *) *)placeStyleLayers {
+    NSSet *streetsSourceIdentifiers = [self.mapboxStreetsSources valueForKey:@"identifier"];
+    
+    NSSet *placeSourceLayerIdentifiers = [NSSet setWithObjects:@"marine_label", @"country_label", @"state_label", @"place_label", @"water_label", @"poi_label", @"rail_station_label", @"mountain_peak_label", nil];
+    NSPredicate *isPlacePredicate = [NSPredicate predicateWithBlock:^BOOL (MGLVectorStyleLayer * _Nullable layer, NSDictionary<NSString *, id> * _Nullable bindings) {
+        return [layer isKindOfClass:[MGLVectorStyleLayer class]] && [streetsSourceIdentifiers containsObject:layer.sourceIdentifier] && [placeSourceLayerIdentifiers containsObject:layer.sourceLayerIdentifier];
+    }];
+    return [self.layers filteredArrayUsingPredicate:isPlacePredicate];
+}
+
+- (NS_ARRAY_OF(MGLStyleLayer *) *)roadStyleLayers {
+    NSSet *streetsSourceIdentifiers = [self.mapboxStreetsSources valueForKey:@"identifier"];
+    
+    NSPredicate *isPlacePredicate = [NSPredicate predicateWithBlock:^BOOL (MGLVectorStyleLayer * _Nullable layer, NSDictionary<NSString *, id> * _Nullable bindings) {
+        return [layer isKindOfClass:[MGLVectorStyleLayer class]] && [streetsSourceIdentifiers containsObject:layer.sourceIdentifier] && [layer.sourceLayerIdentifier isEqualToString:@"road_label"];
+    }];
+    return [self.layers filteredArrayUsingPredicate:isPlacePredicate];
 }
 
 @end

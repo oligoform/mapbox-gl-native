@@ -1,7 +1,9 @@
 #import "MGLTileSource_Private.h"
 
 #import "MGLAttributionInfo_Private.h"
+#import "MGLGeometry_Private.h"
 #import "NSString+MGLAdditions.h"
+#import "NSValue+MGLAdditions.h"
 
 #if TARGET_OS_IPHONE
     #import <UIKit/UIKit.h>
@@ -13,18 +15,17 @@
 
 const MGLTileSourceOption MGLTileSourceOptionMinimumZoomLevel = @"MGLTileSourceOptionMinimumZoomLevel";
 const MGLTileSourceOption MGLTileSourceOptionMaximumZoomLevel = @"MGLTileSourceOptionMaximumZoomLevel";
+const MGLTileSourceOption MGLTileSourceOptionCoordinateBounds = @"MGLTileSourceOptionCoordinateBounds";
 const MGLTileSourceOption MGLTileSourceOptionAttributionHTMLString = @"MGLTileSourceOptionAttributionHTMLString";
 const MGLTileSourceOption MGLTileSourceOptionAttributionInfos = @"MGLTileSourceOptionAttributionInfos";
 const MGLTileSourceOption MGLTileSourceOptionTileCoordinateSystem = @"MGLTileSourceOptionTileCoordinateSystem";
 
 @implementation MGLTileSource
 
-- (instancetype)initWithIdentifier:(NSString *)identifier configurationURL:(NSURL *)configurationURL {
-    return [super initWithIdentifier:identifier];
-}
-
-- (instancetype)initWithIdentifier:(NSString *)identifier tileURLTemplates:(NS_ARRAY_OF(NSString *) *)tileURLTemplates options:(NS_DICTIONARY_OF(MGLTileSourceOption, id) *)options {
-    return [super initWithIdentifier:identifier];
+- (NSURL *)configurationURL {
+    [NSException raise:@"MGLAbstractClassException"
+                format:@"MGLTileSource is an abstract class"];
+    return nil;
 }
 
 - (NS_ARRAY_OF(MGLAttributionInfo *) *)attributionInfos {
@@ -47,11 +48,11 @@ const MGLTileSourceOption MGLTileSourceOptionTileCoordinateSystem = @"MGLTileSou
 
 mbgl::Tileset MGLTileSetFromTileURLTemplates(NS_ARRAY_OF(NSString *) *tileURLTemplates, NS_DICTIONARY_OF(MGLTileSourceOption, id) * _Nullable options) {
     mbgl::Tileset tileSet;
-    
+
     for (NSString *tileURLTemplate in tileURLTemplates) {
         tileSet.tiles.push_back(tileURLTemplate.UTF8String);
     }
-    
+
     // set the minimum / maximum zoom range to the values specified by this class if they
     // were set. otherwise, use the core objects default values
     if (NSNumber *minimumZoomLevel = options[MGLTileSourceOptionMinimumZoomLevel]) {
@@ -73,6 +74,15 @@ mbgl::Tileset MGLTileSetFromTileURLTemplates(NS_ARRAY_OF(NSString *) *tileURLTem
                     format:@"MGLTileSourceOptionMinimumZoomLevel must be less than MGLTileSourceOptionMaximumZoomLevel."];
     }
     
+    if (NSValue *coordinateBounds = options[MGLTileSourceOptionCoordinateBounds]) {
+        if (![coordinateBounds isKindOfClass:[NSValue class]]
+            && strcmp(coordinateBounds.objCType, @encode(MGLCoordinateBounds)) == 0) {
+            [NSException raise:NSInvalidArgumentException
+                        format:@"MGLTileSourceOptionCoordinateBounds must be set to an NSValue containing an MGLCoordinateBounds."];
+        }
+        tileSet.bounds = MGLLatLngBoundsFromCoordinateBounds(coordinateBounds.MGLCoordinateBoundsValue);
+    }
+
     if (NSString *attribution = options[MGLTileSourceOptionAttributionHTMLString]) {
         if (![attribution isKindOfClass:[NSString class]]) {
             [NSException raise:NSInvalidArgumentException
@@ -80,13 +90,13 @@ mbgl::Tileset MGLTileSetFromTileURLTemplates(NS_ARRAY_OF(NSString *) *tileURLTem
         }
         tileSet.attribution = attribution.UTF8String;
     }
-    
+
     if (NSArray *attributionInfos = options[MGLTileSourceOptionAttributionInfos]) {
         if (![attributionInfos isKindOfClass:[NSArray class]]) {
             [NSException raise:NSInvalidArgumentException
                         format:@"MGLTileSourceOptionAttributionInfos must be set to a string."];
         }
-        
+
         NSAttributedString *attributedString = [MGLAttributionInfo attributedStringForAttributionInfos:attributionInfos];
 #if TARGET_OS_IPHONE
         static NSString * const NSExcludedElementsDocumentAttribute = @"ExcludedElements";
@@ -101,7 +111,7 @@ mbgl::Tileset MGLTileSetFromTileURLTemplates(NS_ARRAY_OF(NSString *) *tileURLTem
         NSString *html = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
         tileSet.attribution = html.UTF8String;
     }
-    
+
     if (NSNumber *tileCoordinateSystemNumber = options[MGLTileSourceOptionTileCoordinateSystem]) {
         if (![tileCoordinateSystemNumber isKindOfClass:[NSValue class]]) {
             [NSException raise:NSInvalidArgumentException
@@ -118,6 +128,6 @@ mbgl::Tileset MGLTileSetFromTileURLTemplates(NS_ARRAY_OF(NSString *) *tileURLTem
                 break;
         }
     }
-    
+
     return tileSet;
 }

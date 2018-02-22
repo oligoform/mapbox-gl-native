@@ -19,11 +19,48 @@ NS_ASSUME_NONNULL_END
 {
     if (self = [super init])
     {
-        _location = [[CLLocation alloc] initWithLatitude:MAXFLOAT longitude:MAXFLOAT];
         _mapView = mapView;
     }
 
     return self;
+}
+
++ (BOOL)supportsSecureCoding {
+    return YES;
+}
+
+- (instancetype)initWithCoder:(NSCoder *)decoder {
+    if (self = [super init]) {
+        _location = [decoder decodeObjectOfClass:[CLLocation class] forKey:@"location"];
+        _title = [decoder decodeObjectOfClass:[NSString class] forKey:@"title"];
+        _subtitle = [decoder decodeObjectOfClass:[NSString class] forKey:@"subtitle"];
+    }
+    return self;
+}
+
+- (void)encodeWithCoder:(NSCoder *)coder {
+    [coder encodeObject:_location forKey:@"location"];
+    [coder encodeObject:_title forKey:@"title"];
+    [coder encodeObject:_subtitle forKey:@"subtitle"];
+}
+
+- (BOOL)isEqual:(id)other {
+    if (self == other) return YES;
+    if (![other isKindOfClass:[MGLUserLocation class]]) return NO;
+
+    MGLUserLocation *otherUserLocation = other;
+    return ((!self.location && !otherUserLocation.location) || [self.location distanceFromLocation:otherUserLocation.location] == 0)
+    && ((!self.title && !otherUserLocation.title) || [self.title isEqualToString:otherUserLocation.title])
+    && ((!self.subtitle && !otherUserLocation.subtitle) || [self.subtitle isEqualToString:otherUserLocation.subtitle]);
+}
+
+- (NSUInteger)hash {
+    NSUInteger hash = [super hash];
+    hash += [_location hash];
+    hash += [_heading hash];
+    hash += [_title hash];
+    hash += [_subtitle hash];
+    return hash;
 }
 
 + (BOOL)automaticallyNotifiesObserversForKey:(NSString *)key
@@ -64,7 +101,7 @@ NS_ASSUME_NONNULL_END
 
 - (CLLocationCoordinate2D)coordinate
 {
-    return self.location.coordinate;
+    return _location ? _location.coordinate : kCLLocationCoordinate2DInvalid;
 }
 
 - (NSString *)title

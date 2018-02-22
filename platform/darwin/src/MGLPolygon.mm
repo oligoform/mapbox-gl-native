@@ -1,11 +1,12 @@
-#import "MGLPolygon.h"
+#import "MGLPolygon_Private.h"
 
 #import "MGLMultiPoint_Private.h"
 #import "MGLGeometry_Private.h"
 
-#import "MGLPolygon+MGLAdditions.h"
+#import "MGLFeature.h"
 
 #import <mbgl/util/geojson.hpp>
+#import <mapbox/polylabel.hpp>
 
 @implementation MGLPolygon
 
@@ -26,6 +27,39 @@
         }
     }
     return self;
+}
+
+- (instancetype)initWithCoder:(NSCoder *)decoder {
+    self = [super initWithCoder:decoder];
+    if (self) {
+        _interiorPolygons = [decoder decodeObjectOfClass:[NSArray class] forKey:@"interiorPolygons"];
+    }
+    return self;
+}
+
+- (void)encodeWithCoder:(NSCoder *)coder {
+    [super encodeWithCoder:coder];
+    [coder encodeObject:self.interiorPolygons forKey:@"interiorPolygons"];
+}
+
+- (BOOL)isEqual:(id)other {
+    if (self == other) return YES;
+    if (![other isKindOfClass:[MGLPolygon class]]) return NO;
+
+    MGLPolygon *otherPolygon = (MGLPolygon *)other;
+    return ([super isEqual:otherPolygon] &&
+            [[self geoJSONDictionary] isEqualToDictionary:[otherPolygon geoJSONDictionary]]);
+}
+
+- (NSUInteger)hash {
+    return [super hash] + [[self geoJSONDictionary] hash];
+}
+
+- (CLLocationCoordinate2D)coordinate {
+    // pole of inaccessibility
+    auto poi = mapbox::polylabel([self polygon]);
+    
+    return MGLLocationCoordinate2DFromPoint(poi);
 }
 
 - (mbgl::LinearRing<double>)ring {
@@ -54,7 +88,7 @@
 }
 
 - (mbgl::Annotation)annotationObjectWithDelegate:(id <MGLMultiPointDelegate>)delegate {
-    
+
     mbgl::FillAnnotation annotation { [self polygon] };
     annotation.opacity = { static_cast<float>([delegate alphaForShapeAnnotation:self]) };
     annotation.outlineColor = { [delegate strokeColorForShapeAnnotation:self] };
@@ -66,6 +100,28 @@
 - (NSDictionary *)geoJSONDictionary {
     return @{@"type": @"Polygon",
              @"coordinates": self.mgl_coordinates};
+}
+
+- (NS_ARRAY_OF(id) *)mgl_coordinates {
+    NSMutableArray *coordinates = [NSMutableArray array];
+
+    NSMutableArray *exteriorRing = [NSMutableArray array];
+    for (NSUInteger index = 0; index < self.pointCount; index++) {
+        CLLocationCoordinate2D coordinate = self.coordinates[index];
+        [exteriorRing addObject:@[@(coordinate.longitude), @(coordinate.latitude)]];
+    }
+    [coordinates addObject:exteriorRing];
+
+    for (MGLPolygon *interiorPolygon in self.interiorPolygons) {
+        NSMutableArray *interiorRing = [NSMutableArray array];
+        for (int index = 0; index < interiorPolygon.pointCount; index++) {
+            CLLocationCoordinate2D coordinate = interiorPolygon.coordinates[index];
+            [interiorRing addObject:@[@(coordinate.longitude), @(coordinate.latitude)]];
+        }
+        [coordinates addObject:interiorRing];
+    }
+
+    return [coordinates copy];
 }
 
 @end
@@ -89,9 +145,9 @@
 - (instancetype)initWithPolygons:(NS_ARRAY_OF(MGLPolygon *) *)polygons {
     if (self = [super init]) {
         _polygons = polygons;
-        
+
         mbgl::LatLngBounds bounds = mbgl::LatLngBounds::empty();
-        
+
         for (MGLPolygon *polygon in _polygons) {
             bounds.extend(MGLLatLngBoundsFromCoordinateBounds(polygon.overlayBounds));
         }
@@ -100,11 +156,46 @@
     return self;
 }
 
+- (instancetype)initWithCoder:(NSCoder *)decoder {
+    if (self = [super initWithCoder:decoder]) {
+        _polygons = [decoder decodeObjectOfClass:[NSArray class] forKey:@"polygons"];
+    }
+    return self;
+}
+
+- (void)encodeWithCoder:(NSCoder *)coder {
+    [super encodeWithCoder:coder];
+    [coder encodeObject:_polygons forKey:@"polygons"];
+}
+
+- (BOOL)isEqual:(id)other {
+    if (self == other) return YES;
+    if (![other isKindOfClass:[MGLMultiPolygon class]]) return NO;
+
+    MGLMultiPolygon *otherMultiPolygon = other;
+    return [super isEqual:other]
+    && [self.polygons isEqualToArray:otherMultiPolygon.polygons];
+}
+
+- (NSUInteger)hash {
+    NSUInteger hash = [super hash];
+    for (MGLPolygon *polygon in self.polygons) {
+        hash += [polygon hash];
+    }
+    return hash;
+}
+
+- (CLLocationCoordinate2D)coordinate {
+    MGLPolygon *firstPolygon = self.polygons.firstObject;
+    
+    return firstPolygon.coordinate;
+}
+
 - (BOOL)intersectsOverlayBounds:(MGLCoordinateBounds)overlayBounds {
     return MGLCoordinateBoundsIntersectsCoordinateBounds(_overlayBounds, overlayBounds);
 }
 
-- (mbgl::Geometry<double>)geometryObject {
+- (mbgl::MultiPolygon<double>)multiPolygon {
     mbgl::MultiPolygon<double> multiPolygon;
     multiPolygon.reserve(self.polygons.count);
     for (MGLPolygon *polygon in self.polygons) {
@@ -118,6 +209,10 @@
     return multiPolygon;
 }
 
+- (mbgl::Geometry<double>)geometryObject {
+    return [self multiPolygon];
+}
+
 - (NSDictionary *)geoJSONDictionary {
     NSMutableArray *coordinates = [[NSMutableArray alloc] initWithCapacity:self.polygons.count];
     for (MGLPolygonFeature *feature in self.polygons) {
@@ -125,6 +220,16 @@
     }
     return @{@"type": @"MultiPolygon",
              @"coordinates": coordinates};
+}
+
+- (NSString *)description
+{
+    return [NSString stringWithFormat:@"<%@: %p; title = %@, subtitle: = %@, count = %lu; bounds = %@>",
+            NSStringFromClass([self class]), (void *)self,
+            self.title ? [NSString stringWithFormat:@"\"%@\"", self.title] : self.title,
+            self.subtitle ? [NSString stringWithFormat:@"\"%@\"", self.subtitle] : self.subtitle,
+            (unsigned long)self.polygons.count,
+            MGLStringFromCoordinateBounds(self.overlayBounds)];
 }
 
 @end

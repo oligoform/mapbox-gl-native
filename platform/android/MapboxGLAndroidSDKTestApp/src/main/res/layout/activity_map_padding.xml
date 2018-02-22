@@ -1,20 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="match_parent"
-    android:layout_height="match_parent"
-    android:orientation="vertical">
+<merge xmlns:android="http://schemas.android.com/apk/res/android">
 
     <com.mapbox.mapboxsdk.maps.MapView
         android:id="@id/mapView"
         android:layout_width="match_parent"
-        android:layout_height="match_parent" />
+        android:layout_height="match_parent"/>
 
     <View
         android:layout_width="@dimen/map_padding_left"
         android:layout_height="match_parent"
-        android:layout_marginTop="?attr/actionBarSize"
         android:alpha="0.5"
-        android:background="@color/mapbox_blue" />
+        android:background="@color/mapbox_blue"/>
 
     <View
         android:layout_width="match_parent"
@@ -25,22 +21,13 @@
         android:layout_marginRight="@dimen/map_padding_right"
         android:layout_marginStart="@dimen/map_padding_left"
         android:alpha="0.5"
-        android:background="@color/mapbox_blue" />
-
-    <android.support.v7.widget.Toolbar
-        android:id="@+id/toolbar"
-        android:layout_width="match_parent"
-        android:layout_height="?attr/actionBarSize"
-        android:alpha="0.5"
-        android:background="@color/primary"
-        android:theme="@style/ThemeOverlay.AppCompat.Dark.ActionBar" />
+        android:background="@color/mapbox_blue"/>
 
     <View
         android:layout_width="@dimen/map_padding_right"
         android:layout_height="match_parent"
         android:layout_gravity="end"
-        android:layout_marginTop="?attr/actionBarSize"
         android:alpha="0.5"
-        android:background="@color/mapbox_blue" />
+        android:background="@color/mapbox_blue"/>
 
-</FrameLayout>
+</merge>

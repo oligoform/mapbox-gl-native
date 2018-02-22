@@ -3,21 +3,26 @@
 #include <mbgl/gl/gl.hpp>
 #include <mbgl/gl/context.hpp>
 #include <mbgl/gl/headless_backend.hpp>
-#include <mbgl/gl/offscreen_view.hpp>
+#include <mbgl/renderer/backend_scope.hpp>
 
 #include <mbgl/util/offscreen_texture.hpp>
 
 using namespace mbgl;
 
 TEST(OffscreenTexture, EmptyRed) {
-    HeadlessBackend backend { test::sharedDisplay() };
-    OffscreenView view(backend.getContext(), { 512, 256 });
-    view.bind();
+    HeadlessBackend backend({ 512, 256 });
+    BackendScope scope { backend };
+
+    // Scissor test shouldn't leak after HeadlessBackend::bind().
+    MBGL_CHECK_ERROR(glScissor(64, 64, 128, 128));
+    backend.getContext().scissorTest.setCurrentValue(true);
+
+    backend.bind();
 
     MBGL_CHECK_ERROR(glClearColor(1.0f, 0.0f, 0.0f, 1.0f));
     MBGL_CHECK_ERROR(glClear(GL_COLOR_BUFFER_BIT));
 
-    auto image = view.readStillImage();
+    auto image = backend.readStillImage();
     test::checkImage("test/fixtures/offscreen_texture/empty-red", image, 0, 0);
 }
 
@@ -33,7 +38,7 @@ struct Shader {
         MBGL_CHECK_ERROR(glCompileShader(fragmentShader));
         MBGL_CHECK_ERROR(glAttachShader(program, fragmentShader));
         MBGL_CHECK_ERROR(glLinkProgram(program));
-        a_pos = glGetAttribLocation(program, "a_pos");
+        a_pos = MBGL_CHECK_ERROR(glGetAttribLocation(program, "a_pos"));
     }
 
     ~Shader() {
@@ -67,7 +72,8 @@ struct Buffer {
 
 
 TEST(OffscreenTexture, RenderToTexture) {
-    HeadlessBackend backend { test::sharedDisplay() };
+    HeadlessBackend backend({ 512, 256 });
+    BackendScope scope { backend };
     auto& context = backend.getContext();
 
     MBGL_CHECK_ERROR(glEnable(GL_BLEND));
@@ -111,55 +117,54 @@ void main() {
 }
 )MBGL_SHADER");
 
-    GLuint u_texture = glGetUniformLocation(compositeShader.program, "u_texture");
+    GLuint u_texture = MBGL_CHECK_ERROR(glGetUniformLocation(compositeShader.program, "u_texture"));
 
     Buffer triangleBuffer({ 0, 0.5, 0.5, -0.5, -0.5, -0.5 });
     Buffer viewportBuffer({ -1, -1, 1, -1, -1, 1, 1, 1 });
 
-    // Make sure the texture gets destructed before we call context.reset();
-    {
-        OffscreenView view(context, { 512, 256 });
-        view.bind();
+    backend.bind();
 
-        // First, draw red to the bound FBO.
-        context.clear(Color::red(), {}, {});
+    // First, draw red to the bound FBO.
+    context.clear(Color::red(), {}, {});
 
-        // Then, create a texture, bind it, and render yellow to that texture. This should not
-        // affect the originally bound FBO.
-        OffscreenTexture texture(context, { 128, 128 });
-        texture.bind();
+    // Then, create a texture, bind it, and render yellow to that texture. This should not
+    // affect the originally bound FBO.
+    OffscreenTexture texture(context, { 128, 128 });
 
-        context.clear(Color(), {}, {});
+    // Scissor test shouldn't leak after OffscreenTexture::bind().
+    MBGL_CHECK_ERROR(glScissor(32, 32, 64, 64));
+    context.scissorTest.setCurrentValue(true);
 
-        MBGL_CHECK_ERROR(glUseProgram(paintShader.program));
-        MBGL_CHECK_ERROR(glBindBuffer(GL_ARRAY_BUFFER, triangleBuffer.buffer));
-        MBGL_CHECK_ERROR(glEnableVertexAttribArray(paintShader.a_pos));
-        MBGL_CHECK_ERROR(
-            glVertexAttribPointer(paintShader.a_pos, 2, GL_FLOAT, GL_FALSE, 0, nullptr));
-        MBGL_CHECK_ERROR(glDrawArrays(GL_TRIANGLE_STRIP, 0, 3));
+    texture.bind();
 
-        auto image = texture.readStillImage();
-        test::checkImage("test/fixtures/offscreen_texture/render-to-texture", image, 0, 0);
+    context.clear(Color(), {}, {});
 
-        // Now reset the FBO back to normal and retrieve the original (restored) framebuffer.
-        view.bind();
+    MBGL_CHECK_ERROR(glUseProgram(paintShader.program));
+    MBGL_CHECK_ERROR(glBindBuffer(GL_ARRAY_BUFFER, triangleBuffer.buffer));
+    MBGL_CHECK_ERROR(glEnableVertexAttribArray(paintShader.a_pos));
+    MBGL_CHECK_ERROR(
+        glVertexAttribPointer(paintShader.a_pos, 2, GL_FLOAT, GL_FALSE, 0, nullptr));
+    MBGL_CHECK_ERROR(glDrawArrays(GL_TRIANGLE_STRIP, 0, 3));
 
-        image = view.readStillImage();
-        test::checkImage("test/fixtures/offscreen_texture/render-to-fbo", image, 0, 0);
+    auto image = texture.readStillImage();
+    test::checkImage("test/fixtures/offscreen_texture/render-to-texture", image, 0, 0);
 
-        // Now, composite the Framebuffer texture we've rendered to onto the main FBO.
-        context.bindTexture(texture.getTexture(), 0, gl::TextureFilter::Linear);
-        MBGL_CHECK_ERROR(glUseProgram(compositeShader.program));
-        MBGL_CHECK_ERROR(glUniform1i(u_texture, 0));
-        MBGL_CHECK_ERROR(glBindBuffer(GL_ARRAY_BUFFER, viewportBuffer.buffer));
-        MBGL_CHECK_ERROR(glEnableVertexAttribArray(compositeShader.a_pos));
-        MBGL_CHECK_ERROR(
-            glVertexAttribPointer(compositeShader.a_pos, 2, GL_FLOAT, GL_FALSE, 0, nullptr));
-        MBGL_CHECK_ERROR(glDrawArrays(GL_TRIANGLE_STRIP, 0, 4));
+    // Now reset the FBO back to normal and retrieve the original (restored) framebuffer.
+    backend.bind();
 
-        image = view.readStillImage();
-        test::checkImage("test/fixtures/offscreen_texture/render-to-fbo-composited", image, 0, 0.1);
-    }
+    image = backend.readStillImage();
+    test::checkImage("test/fixtures/offscreen_texture/render-to-fbo", image, 0, 0);
 
-    context.reset();
+    // Now, composite the Framebuffer texture we've rendered to onto the main FBO.
+    context.bindTexture(texture.getTexture(), 0, gl::TextureFilter::Linear);
+    MBGL_CHECK_ERROR(glUseProgram(compositeShader.program));
+    MBGL_CHECK_ERROR(glUniform1i(u_texture, 0));
+    MBGL_CHECK_ERROR(glBindBuffer(GL_ARRAY_BUFFER, viewportBuffer.buffer));
+    MBGL_CHECK_ERROR(glEnableVertexAttribArray(compositeShader.a_pos));
+    MBGL_CHECK_ERROR(
+        glVertexAttribPointer(compositeShader.a_pos, 2, GL_FLOAT, GL_FALSE, 0, nullptr));
+    MBGL_CHECK_ERROR(glDrawArrays(GL_TRIANGLE_STRIP, 0, 4));
+
+    image = backend.readStillImage();
+    test::checkImage("test/fixtures/offscreen_texture/render-to-fbo-composited", image, 0, 0.1);
 }

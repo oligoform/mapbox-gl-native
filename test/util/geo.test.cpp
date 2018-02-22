@@ -6,6 +6,60 @@
 
 using namespace mbgl;
 
+TEST(LatLng, InvalidLatLng) {
+    try {
+        LatLng { NAN };
+        ASSERT_TRUE(false) << "should throw";
+    } catch (const std::domain_error& error) {
+        ASSERT_EQ(std::string(error.what()), "latitude must not be NaN");
+    }
+    try {
+        LatLng { 0, NAN };
+        ASSERT_TRUE(false) << "should throw";
+    } catch (const std::domain_error& error) {
+        ASSERT_EQ(std::string(error.what()), "longitude must not be NaN");
+    }
+    try {
+        LatLng { 91.0 };
+        ASSERT_TRUE(false) << "should throw";
+    } catch (const std::domain_error& error) {
+        ASSERT_EQ(std::string(error.what()), "latitude must be between -90 and 90");
+    }
+    try {
+        LatLng { 0, std::numeric_limits<double>::infinity() };
+        ASSERT_TRUE(false) << "should throw";
+    } catch (const std::domain_error& error) {
+        ASSERT_EQ(std::string(error.what()), "longitude must not be infinite");
+    }
+}
+
+TEST(EdgeInsets, InvalidEdgeInsets) {
+    try {
+        EdgeInsets { NAN };
+        ASSERT_TRUE(false) << "should throw";
+    } catch (const std::domain_error& error) {
+        ASSERT_EQ(std::string(error.what()), "top must not be NaN");
+    }
+    try {
+        EdgeInsets { 0, NAN };
+        ASSERT_TRUE(false) << "should throw";
+    } catch (const std::domain_error& error) {
+        ASSERT_EQ(std::string(error.what()), "left must not be NaN");
+    }
+    try {
+        EdgeInsets { 0, 0, NAN };
+        ASSERT_TRUE(false) << "should throw";
+    } catch (const std::domain_error& error) {
+        ASSERT_EQ(std::string(error.what()), "bottom must not be NaN");
+    }
+    try {
+        EdgeInsets { 0, 0, 0, NAN };
+        ASSERT_TRUE(false) << "should throw";
+    } catch (const std::domain_error& error) {
+        ASSERT_EQ(std::string(error.what()), "right must not be NaN");
+    }
+}
+
 TEST(LatLngBounds, World) {
     auto result = LatLngBounds::world();
     ASSERT_DOUBLE_EQ(-90,  result.south());
@@ -57,80 +111,80 @@ TEST(LatLngBounds, Empty) {
 
 TEST(LatLngBounds, Center) {
     auto result = LatLngBounds::hull({1, 2}, {3, 4}).center();
-    ASSERT_DOUBLE_EQ(2, result.latitude);
-    ASSERT_DOUBLE_EQ(3, result.longitude);
+    ASSERT_DOUBLE_EQ(2, result.latitude());
+    ASSERT_DOUBLE_EQ(3, result.longitude());
 }
 
 TEST(LatLngBounds, Southwest) {
     auto result = LatLngBounds::hull({1, 2}, {3, 4}).southwest();
-    ASSERT_DOUBLE_EQ(1, result.latitude);
-    ASSERT_DOUBLE_EQ(2, result.longitude);
+    ASSERT_DOUBLE_EQ(1, result.latitude());
+    ASSERT_DOUBLE_EQ(2, result.longitude());
 }
 
 TEST(LatLngBounds, Northeast) {
     auto result = LatLngBounds::hull({1, 2}, {3, 4}).northeast();
-    ASSERT_DOUBLE_EQ(3, result.latitude);
-    ASSERT_DOUBLE_EQ(4, result.longitude);
+    ASSERT_DOUBLE_EQ(3, result.latitude());
+    ASSERT_DOUBLE_EQ(4, result.longitude());
 }
 
 TEST(LatLngBounds, Southeast) {
     auto result = LatLngBounds::hull({1, 2}, {3, 4}).southeast();
-    ASSERT_DOUBLE_EQ(1, result.latitude);
-    ASSERT_DOUBLE_EQ(4, result.longitude);
+    ASSERT_DOUBLE_EQ(1, result.latitude());
+    ASSERT_DOUBLE_EQ(4, result.longitude());
 }
 
 TEST(LatLngBounds, Northwest) {
     auto result = LatLngBounds::hull({1, 2}, {3, 4}).northwest();
-    ASSERT_DOUBLE_EQ(3, result.latitude);
-    ASSERT_DOUBLE_EQ(2, result.longitude);
+    ASSERT_DOUBLE_EQ(3, result.latitude());
+    ASSERT_DOUBLE_EQ(2, result.longitude());
 }
 
 TEST(LatLng, FromTileID) {
     for (int i = 0; i < 20; i++) {
         const LatLng ll{ CanonicalTileID(i, 0, 0) };
-        ASSERT_DOUBLE_EQ(-util::LONGITUDE_MAX, ll.longitude);
-        ASSERT_DOUBLE_EQ(util::LATITUDE_MAX, ll.latitude);
+        ASSERT_DOUBLE_EQ(-util::LONGITUDE_MAX, ll.longitude());
+        ASSERT_DOUBLE_EQ(util::LATITUDE_MAX, ll.latitude());
     }
 
     {
         const LatLng ll{ UnwrappedTileID(0, 1, 0) };
-        ASSERT_DOUBLE_EQ(util::LONGITUDE_MAX, ll.longitude);
-        ASSERT_DOUBLE_EQ(util::LATITUDE_MAX, ll.latitude);
+        ASSERT_DOUBLE_EQ(util::LONGITUDE_MAX, ll.longitude());
+        ASSERT_DOUBLE_EQ(util::LATITUDE_MAX, ll.latitude());
     }
 
     {
         const LatLng ll{ UnwrappedTileID(0, -1, 0) };
-        ASSERT_DOUBLE_EQ(-540, ll.longitude);
-        ASSERT_DOUBLE_EQ(util::LATITUDE_MAX, ll.latitude);
+        ASSERT_DOUBLE_EQ(-540, ll.longitude());
+        ASSERT_DOUBLE_EQ(util::LATITUDE_MAX, ll.latitude());
     }
 }
 
 TEST(LatLng, Boundaries) {
     LatLng coordinate;
-    ASSERT_DOUBLE_EQ(0, coordinate.latitude);
-    ASSERT_DOUBLE_EQ(0, coordinate.longitude);
+    ASSERT_DOUBLE_EQ(0, coordinate.latitude());
+    ASSERT_DOUBLE_EQ(0, coordinate.longitude());
 
-    coordinate.longitude = -180.1;
-    ASSERT_DOUBLE_EQ(-180.1, coordinate.longitude);
+    coordinate = LatLng(0, -180.1);
+    ASSERT_DOUBLE_EQ(-180.1, coordinate.longitude());
 
     coordinate.wrap();
-    ASSERT_DOUBLE_EQ(179.90000000000001, coordinate.longitude); // 1E-14
+    ASSERT_DOUBLE_EQ(179.90000000000001, coordinate.longitude()); // 1E-14
 
-    coordinate.longitude = 180.9;
+    coordinate = LatLng(0, 180.9);
     coordinate.wrap();
-    ASSERT_DOUBLE_EQ(-179.09999999999999, coordinate.longitude);
+    ASSERT_DOUBLE_EQ(-179.09999999999999, coordinate.longitude());
 
-    coordinate.longitude = -360.5;
+    coordinate = LatLng(0, -360.5);
     coordinate.wrap();
-    ASSERT_DOUBLE_EQ(-0.5, coordinate.longitude);
+    ASSERT_DOUBLE_EQ(-0.5, coordinate.longitude());
 
-    coordinate.longitude = 360.5;
+    coordinate = LatLng(0, 360.5);
     coordinate.wrap();
-    ASSERT_DOUBLE_EQ(0.5, coordinate.longitude);
+    ASSERT_DOUBLE_EQ(0.5, coordinate.longitude());
 
-    coordinate.longitude = 360000.5;
+    coordinate = LatLng(0, 360000.5);
     coordinate.wrap();
-    ASSERT_DOUBLE_EQ(0.5, coordinate.longitude);
+    ASSERT_DOUBLE_EQ(0.5, coordinate.longitude());
 }
 
 TEST(LatLngBounds, FromTileID) {
@@ -165,4 +219,129 @@ TEST(LatLngBounds, FromTileID) {
         ASSERT_DOUBLE_EQ(0, bounds.east());
         ASSERT_DOUBLE_EQ(util::LATITUDE_MAX, bounds.north());
     }
+}
+
+TEST(LatLngBounds, ContainsPoint) {
+    auto bounds = LatLngBounds::hull({50.0, -100.0},{-50.0, 100.0});
+
+    EXPECT_FALSE(bounds.contains(LatLng{0.0, 170.0}));
+    EXPECT_FALSE(bounds.contains(LatLng{0.0, -170.0}));
+    EXPECT_TRUE(bounds.contains(LatLng{0.0, -100.0}));
+    EXPECT_TRUE(bounds.contains(LatLng{-50.0, 100.0}));
+    EXPECT_FALSE(bounds.contains(LatLng{0.0, 365.0}));
+}
+
+TEST(LatLngBounds, ContainsPoint_Wrapped) {
+    auto bounds = LatLngBounds::hull({50.0, -160.0}, {-50.0, 160.0});
+    EXPECT_FALSE(bounds.contains(LatLng{0.0, 170.0}));
+    EXPECT_FALSE(bounds.contains(LatLng{0.0, -170.0}));
+
+    bounds = LatLngBounds::hull({50.0, -200}, {-50.0, -160.0});
+    EXPECT_FALSE(bounds.contains(LatLng{0.0, 170.0}));
+    EXPECT_TRUE(bounds.contains(LatLng{0.0, 170.0}, LatLng::Wrapped));
+    EXPECT_TRUE(bounds.contains(LatLng{0.0, -170.0}));
+    EXPECT_TRUE(bounds.contains(LatLng{0.0, -170.0}, LatLng::Wrapped));
+    EXPECT_FALSE(bounds.contains(LatLng{0.0, 190.0}));
+    EXPECT_TRUE(bounds.contains(LatLng{0.0, 190.0}, LatLng::Wrapped));
+    EXPECT_FALSE(bounds.contains(LatLng{0.0, 541.0}));
+    EXPECT_TRUE(bounds.contains(LatLng{0.0, 541.0}, LatLng::Wrapped));
+}
+
+TEST(LatLngBounds, ContainsBounds) {
+    auto bounds = LatLngBounds::hull({ 50.0, -160.0 }, {-50.0, 160.0});
+    EXPECT_TRUE(bounds.contains(bounds));
+
+    auto innerBounds = LatLngBounds::hull({10.0, -180.0}, {-10.0, -170.0});
+    EXPECT_FALSE(bounds.contains(innerBounds));
+    EXPECT_FALSE(innerBounds.contains(bounds));
+
+    innerBounds = LatLngBounds::hull({10, 120.0}, {-60, 125.0});
+    EXPECT_FALSE(bounds.contains(innerBounds));
+    EXPECT_FALSE(innerBounds.contains(bounds));
+
+    innerBounds = LatLngBounds::hull({10, 120.0}, {-10, 125.0});
+    EXPECT_TRUE(bounds.contains(innerBounds));
+    EXPECT_FALSE(innerBounds.contains(bounds));
+
+}
+
+TEST(LatLngBounds, ContainsBounds_Wrapped) {
+    auto bounds = LatLngBounds::hull({50.0, -200}, {-50.0, -160.0});
+
+    auto inner = LatLngBounds::hull({10.0, -180.0}, {-10.0, -170.0});
+    EXPECT_TRUE(bounds.contains(inner));
+    EXPECT_TRUE(bounds.contains(inner, LatLng::Wrapped));
+
+    inner = LatLngBounds::hull({10.0, 180.0}, {-10.0, 190.0});
+    EXPECT_FALSE(bounds.contains(inner));
+    EXPECT_TRUE(bounds.contains(inner, LatLng::Wrapped));
+
+    inner = LatLngBounds::hull({10.0, 190.0}, {-10.0, 220.0});
+    EXPECT_FALSE(bounds.contains(inner));
+    EXPECT_FALSE(bounds.contains(inner, LatLng::Wrapped));
+
+    auto unwrapped = LatLngBounds::hull({10.0, 170.0}, { -10.0, -175.0});
+    EXPECT_FALSE(bounds.contains(unwrapped));
+    EXPECT_FALSE(bounds.contains(unwrapped, LatLng::Wrapped));
+    
+    unwrapped = LatLngBounds::hull({10.0, 0.0} , {-10.0, -10.0});
+    EXPECT_FALSE(bounds.contains(unwrapped));
+    EXPECT_FALSE(bounds.contains(unwrapped, LatLng::Wrapped));
+    
+    unwrapped = LatLngBounds::hull({10.0, -165.0}, {-10.0, -180.0});
+    EXPECT_TRUE(bounds.contains(unwrapped));
+    EXPECT_TRUE(bounds.contains(unwrapped, LatLng::Wrapped));
+
+    unwrapped = LatLngBounds::hull({10.0, 180.0}, {-10.0, 160.0});
+    EXPECT_FALSE(bounds.contains(unwrapped));
+    EXPECT_TRUE(bounds.contains(unwrapped, LatLng::Wrapped));
+
+    unwrapped = LatLngBounds::hull({10.0, 540.0}, {-10.0, 560.0});
+    EXPECT_FALSE(bounds.contains(unwrapped));
+    EXPECT_TRUE(bounds.contains(unwrapped, LatLng::Wrapped));
+}
+
+TEST(LatLngBounds, ContainsTileIDs) {
+    LatLngBounds bounds(CanonicalTileID(4,2,6));
+    LatLngBounds innerBounds(CanonicalTileID(9,82,197));
+    EXPECT_TRUE(bounds.contains(innerBounds));
+    EXPECT_FALSE(bounds.contains(LatLngBounds{ CanonicalTileID(3, 1, 0) }));
+}
+
+TEST(LatLngBounds, Intersects) {
+    auto bounds = LatLngBounds::hull({ 50.0, -160.0 }, { -50.0, 160.0 });
+    EXPECT_TRUE(bounds.intersects(bounds));
+
+    auto other = LatLngBounds::hull({50.0, -160.0}, {10, 160.0});
+    EXPECT_TRUE(bounds.intersects(other));
+    EXPECT_TRUE(other.intersects(bounds));
+}
+
+TEST(LatLngBounds, Intersects_Wrapped) {
+    auto bounds = LatLngBounds::hull({50.0, -200.0}, {-50.0, -160.0});
+    EXPECT_TRUE(bounds.intersects(bounds));
+
+    auto other = LatLngBounds::hull({50.0, -150.0}, {10, 160.0});
+    EXPECT_FALSE(bounds.intersects(other));
+    EXPECT_FALSE(other.intersects(bounds));
+    EXPECT_FALSE(bounds.intersects(other, LatLng::Wrapped));
+    EXPECT_FALSE(other.intersects(bounds, LatLng::Wrapped));
+
+    other = LatLngBounds::hull({10.0, -150.0}, {-10.0, -210.0});
+    EXPECT_TRUE(bounds.intersects(other));
+    EXPECT_TRUE(bounds.intersects(other, LatLng::Wrapped));
+    EXPECT_TRUE(other.intersects(bounds));
+    EXPECT_TRUE(other.intersects(bounds, LatLng::Wrapped));
+
+    other = LatLngBounds::hull({10.0, 150.0}, {-10.0, 210.0});
+    EXPECT_FALSE(bounds.intersects(other));
+    EXPECT_FALSE(other.intersects(bounds));
+    EXPECT_TRUE(bounds.intersects(other, LatLng::Wrapped));
+    EXPECT_TRUE(other.intersects(bounds, LatLng::Wrapped));
+
+    other = LatLngBounds::hull({10.0, 195.0}, {-10.0, 300.0});
+    EXPECT_FALSE(bounds.intersects(other));
+    EXPECT_FALSE(other.intersects(bounds));
+    EXPECT_TRUE(bounds.intersects(other, LatLng::Wrapped));
+    EXPECT_TRUE(other.intersects(bounds, LatLng::Wrapped));
 }

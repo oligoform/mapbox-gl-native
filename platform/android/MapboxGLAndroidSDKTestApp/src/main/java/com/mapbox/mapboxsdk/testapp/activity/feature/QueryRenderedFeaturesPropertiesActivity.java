@@ -6,32 +6,27 @@ import android.os.Bundle;
 import android.os.Parcel;
 import android.os.Parcelable;
 import android.support.annotation.NonNull;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
-
-import timber.log.Timber;
-
-import android.view.MenuItem;
 import android.view.View;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
 import com.google.gson.JsonElement;
+import com.mapbox.geojson.Feature;
 import com.mapbox.mapboxsdk.annotations.BaseMarkerOptions;
 import com.mapbox.mapboxsdk.annotations.Marker;
-import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.testapp.R;
-import com.mapbox.services.commons.geojson.Feature;
+
 
 import java.util.List;
 import java.util.Map;
 
+import timber.log.Timber;
+
 /**
- * Demo's query rendered features
+ * Test activity showcasing using the query rendered features API to query feature properties on Map click.
  */
 public class QueryRenderedFeaturesPropertiesActivity extends AppCompatActivity {
 
@@ -43,68 +38,60 @@ public class QueryRenderedFeaturesPropertiesActivity extends AppCompatActivity {
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_query_features_point);
-    setupActionBar();
 
     final float density = getResources().getDisplayMetrics().density;
 
-    //Initialize map as normal
+    // Initialize map as normal
     mapView = (MapView) findViewById(R.id.mapView);
     mapView.onCreate(savedInstanceState);
-    mapView.getMapAsync(new OnMapReadyCallback() {
-      @Override
-      public void onMapReady(final MapboxMap mapboxMap) {
-        QueryRenderedFeaturesPropertiesActivity.this.mapboxMap = mapboxMap;
+    mapView.getMapAsync(mapboxMap -> {
+      QueryRenderedFeaturesPropertiesActivity.this.mapboxMap = mapboxMap;
 
-        //Add custom window adapter
-        addCustomInfoWindowAdapter(mapboxMap);
+      // Add custom window adapter
+      addCustomInfoWindowAdapter(mapboxMap);
 
-        //Add a click listener
-        mapboxMap.setOnMapClickListener(new MapboxMap.OnMapClickListener() {
-          @Override
-          public void onMapClick(@NonNull LatLng point) {
-            //Query
-            final PointF pixel = mapboxMap.getProjection().toScreenLocation(point);
-            Timber.i(String.format(
-              "Requesting features for %sx%s (%sx%s adjusted for density)",
-              pixel.x, pixel.y, pixel.x / density, pixel.y / density)
-            );
-            List<Feature> features = mapboxMap.queryRenderedFeatures(pixel);
+      // Add a click listener
+      mapboxMap.setOnMapClickListener(point -> {
+        // Query
+        final PointF pixel = mapboxMap.getProjection().toScreenLocation(point);
+        Timber.i(
+          "Requesting features for %sx%s (%sx%s adjusted for density)",
+          pixel.x, pixel.y, pixel.x / density, pixel.y / density
+        );
+        List<Feature> features = mapboxMap.queryRenderedFeatures(pixel);
 
-            //Debug output
-            debugOutput(features);
+        // Debug output
+        debugOutput(features);
 
-            //Remove any previous markers
-            if (marker != null) {
-              mapboxMap.removeMarker(marker);
-            }
+        // Remove any previous markers
+        if (marker != null) {
+          mapboxMap.removeMarker(marker);
+        }
 
-            //Add a marker on the clicked point
-            marker = mapboxMap.addMarker(new CustomMarkerOptions().position(point).features(features));
-            mapboxMap.selectMarker(marker);
-          }
-        });
-      }
+        // Add a marker on the clicked point
+        marker = mapboxMap.addMarker(new CustomMarkerOptions().position(point).features(features));
+        mapboxMap.selectMarker(marker);
+      });
     });
 
   }
 
   private void debugOutput(List<Feature> features) {
-    Timber.i(String.format("Got %s features", features.size()));
+    Timber.i("Got %s features", features.size());
     for (Feature feature : features) {
       if (feature != null) {
-        Timber.i(String.format("Got feature %s with %s properties and Geometry %s",
-          feature.getId(),
-          feature.getProperties() != null ? feature.getProperties().entrySet().size() : "<null>",
-          feature.getGeometry() != null ? feature.getGeometry().getClass().getSimpleName() : "<null>")
+        Timber.i("Got feature %s with %s properties and Geometry %s",
+          feature.id(),
+          feature.properties() != null ? feature.properties().entrySet().size() : "<null>",
+          feature.geometry() != null ? feature.geometry().getClass().getSimpleName() : "<null>"
         );
-        if (feature.getProperties() != null) {
-          for (Map.Entry<String, JsonElement> entry : feature.getProperties().entrySet()) {
-            Timber.i(String.format("Prop %s - %s", entry.getKey(), entry.getValue()));
+        if (feature.properties() != null) {
+          for (Map.Entry<String, JsonElement> entry : feature.properties().entrySet()) {
+            Timber.i("Prop %s - %s", entry.getKey(), entry.getValue());
           }
         }
       } else {
-        // TODO Question: Why not formatting here??
-        Timber.i("Got NULL feature %s");
+        Timber.i("Got NULL feature");
       }
     }
   }
@@ -128,7 +115,7 @@ public class QueryRenderedFeaturesPropertiesActivity extends AppCompatActivity {
         if (customMarker.features.size() > 0) {
           view.addView(row(String.format("Found %s features", customMarker.features.size())));
           Feature feature = customMarker.features.get(0);
-          for (Map.Entry<String, JsonElement> prop : feature.getProperties().entrySet()) {
+          for (Map.Entry<String, JsonElement> prop : feature.properties().entrySet()) {
             view.addView(row(String.format("%s: %s", prop.getKey(), prop.getValue())));
           }
         } else {
@@ -186,33 +173,11 @@ public class QueryRenderedFeaturesPropertiesActivity extends AppCompatActivity {
     mapView.onLowMemory();
   }
 
-  @Override
-  public boolean onOptionsItemSelected(MenuItem item) {
-    switch (item.getItemId()) {
-      case android.R.id.home:
-        onBackPressed();
-        return true;
-      default:
-        return super.onOptionsItemSelected(item);
-    }
-  }
-
-  private void setupActionBar() {
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    final ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
-    }
-  }
-
   private static class CustomMarker extends Marker {
 
     private final List<Feature> features;
 
-    public CustomMarker(BaseMarkerOptions baseMarkerOptions, List<Feature> features) {
+    CustomMarker(BaseMarkerOptions baseMarkerOptions, List<Feature> features) {
       super(baseMarkerOptions);
       this.features = features;
     }
@@ -228,11 +193,11 @@ public class QueryRenderedFeaturesPropertiesActivity extends AppCompatActivity {
       return this;
     }
 
-    public CustomMarkerOptions() {
+    CustomMarkerOptions() {
     }
 
     private CustomMarkerOptions(Parcel in) {
-      //Should implement this
+      // Should implement this
     }
 
     @Override
@@ -245,8 +210,8 @@ public class QueryRenderedFeaturesPropertiesActivity extends AppCompatActivity {
       return new CustomMarker(this, features);
     }
 
-    public static final Parcelable.Creator<CustomMarkerOptions> CREATOR
-      = new Parcelable.Creator<CustomMarkerOptions>() {
+    public static final Parcelable.Creator<CustomMarkerOptions> CREATOR =
+      new Parcelable.Creator<CustomMarkerOptions>() {
         public CustomMarkerOptions createFromParcel(Parcel in) {
           return new CustomMarkerOptions(in);
         }
@@ -263,7 +228,7 @@ public class QueryRenderedFeaturesPropertiesActivity extends AppCompatActivity {
 
     @Override
     public void writeToParcel(Parcel out, int flags) {
-      //Should implement this
+      // Should implement this
     }
   }
 }

@@ -1,6 +1,10 @@
 #include <mbgl/util/compression.hpp>
 
+#if defined(__QT__) && defined(_WINDOWS)
+#include <QtZlib/zlib.h>
+#else
 #include <zlib.h>
+#endif
 
 #include <cstdio>
 #include <cstring>
@@ -21,6 +25,11 @@ const static bool zlibVersionCheck __attribute__((unused)) = []() {
 
 namespace mbgl {
 namespace util {
+
+// Needed when using a zlib compiled with -DZ_PREFIX
+// because it will mess with this function name and
+// cause a link error.
+#undef compress
 
 std::string compress(const std::string &raw) {
     z_stream deflate_stream;

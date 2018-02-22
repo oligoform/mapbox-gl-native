@@ -1,12 +1,8 @@
 package com.mapbox.mapboxsdk.testapp.activity.offline;
 
 import android.os.Bundle;
-import android.support.annotation.NonNull;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.text.TextUtils;
-import android.view.MenuItem;
 import android.view.View;
 import android.widget.Button;
 import android.widget.ProgressBar;
@@ -15,13 +11,11 @@ import android.widget.Toast;
 import com.mapbox.mapboxsdk.Mapbox;
 import com.mapbox.mapboxsdk.camera.CameraPosition;
 import com.mapbox.mapboxsdk.camera.CameraUpdateFactory;
-import com.mapbox.mapboxsdk.constants.MapboxConstants;
 import com.mapbox.mapboxsdk.constants.Style;
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.geometry.LatLngBounds;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.offline.OfflineManager;
 import com.mapbox.mapboxsdk.offline.OfflineRegion;
 import com.mapbox.mapboxsdk.offline.OfflineRegionError;
@@ -36,6 +30,12 @@ import java.util.ArrayList;
 
 import timber.log.Timber;
 
+/**
+ * Test activity showcasing the Offline API.
+ * <p>
+ * Shows a map of Manhattan and allows the user to download and name a region.
+ * </p>
+ */
 public class OfflineActivity extends AppCompatActivity
   implements OfflineDownloadRegionDialog.DownloadRegionDialogListener {
 
@@ -68,41 +68,28 @@ public class OfflineActivity extends AppCompatActivity
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_offline);
 
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
-    }
-
     // You can use Mapbox.setConnected(Boolean) to manually set the connectivity
     // state of your app. This will override any checks performed via the ConnectivityManager.
-    //Mapbox.getInstance().setConnected(false);
+    // Mapbox.getInstance().setConnected(false);
     Boolean connected = Mapbox.isConnected();
-    Timber.d(String.format(MapboxConstants.MAPBOX_LOCALE,
-      "Mapbox is connected: %b", connected));
+    Timber.d("Mapbox is connected: %s", connected);
 
     // Set up map
     mapView = (MapView) findViewById(R.id.mapView);
     mapView.setStyleUrl(STYLE_URL);
     mapView.onCreate(savedInstanceState);
-    mapView.getMapAsync(new OnMapReadyCallback() {
-      @Override
-      public void onMapReady(@NonNull MapboxMap mapboxMap) {
-        Timber.d("Map is ready");
-        OfflineActivity.this.mapboxMap = mapboxMap;
+    mapView.getMapAsync(mapboxMap -> {
+      Timber.d("Map is ready");
+      OfflineActivity.this.mapboxMap = mapboxMap;
 
-        // Set initial position to UNHQ in NYC
-        mapboxMap.moveCamera(CameraUpdateFactory.newCameraPosition(
-          new CameraPosition.Builder()
-            .target(new LatLng(40.749851, -73.967966))
-            .zoom(14)
-            .bearing(0)
-            .tilt(0)
-            .build()));
-      }
+      // Set initial position to UNHQ in NYC
+      mapboxMap.moveCamera(CameraUpdateFactory.newCameraPosition(
+        new CameraPosition.Builder()
+          .target(new LatLng(40.749851, -73.967966))
+          .zoom(14)
+          .bearing(0)
+          .tilt(0)
+          .build()));
     });
 
     // The progress bar
@@ -110,20 +97,10 @@ public class OfflineActivity extends AppCompatActivity
 
     // Set up button listeners
     downloadRegion = (Button) findViewById(R.id.button_download_region);
-    downloadRegion.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View view) {
-        handleDownloadRegion();
-      }
-    });
+    downloadRegion.setOnClickListener(view -> handleDownloadRegion());
 
     listRegions = (Button) findViewById(R.id.button_list_regions);
-    listRegions.setOnClickListener(new View.OnClickListener() {
-      @Override
-      public void onClick(View view) {
-        handleListRegions();
-      }
-    });
+    listRegions.setOnClickListener(view -> handleListRegions());
 
     // Set up the OfflineManager
     offlineManager = OfflineManager.getInstance(this);
@@ -171,17 +148,6 @@ public class OfflineActivity extends AppCompatActivity
     mapView.onLowMemory();
   }
 
-  @Override
-  public boolean onOptionsItemSelected(MenuItem item) {
-    switch (item.getItemId()) {
-      case android.R.id.home:
-        onBackPressed();
-        return true;
-      default:
-        return super.onOptionsItemSelected(item);
-    }
-  }
-
   /*
    * Buttons logic
    */
@@ -224,7 +190,7 @@ public class OfflineActivity extends AppCompatActivity
 
       @Override
       public void onError(String error) {
-        Timber.e("Error: " + error);
+        Timber.e("Error: %s" , error);
       }
     });
   }
@@ -240,7 +206,7 @@ public class OfflineActivity extends AppCompatActivity
     }
 
     // Start progress bar
-    Timber.d("Download started: " + regionName);
+    Timber.d("Download started: %s", regionName);
     startProgress();
 
     // Definition
@@ -258,14 +224,14 @@ public class OfflineActivity extends AppCompatActivity
     offlineManager.createOfflineRegion(definition, metadata, new OfflineManager.CreateOfflineRegionCallback() {
       @Override
       public void onCreate(OfflineRegion offlineRegion) {
-        Timber.d("Offline region created: " + regionName);
+        Timber.d("Offline region created: %s" , regionName);
         OfflineActivity.this.offlineRegion = offlineRegion;
         launchDownload();
       }
 
       @Override
       public void onError(String error) {
-        Timber.e("Error: " + error);
+        Timber.e("Error: %s", error);
       }
     });
   }
@@ -283,6 +249,8 @@ public class OfflineActivity extends AppCompatActivity
         if (status.isComplete()) {
           // Download complete
           endProgress("Region downloaded successfully.");
+          offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
+          offlineRegion.setObserver(null);
           return;
         } else if (status.isRequiredResourceCountPrecise()) {
           // Switch to determinate state
@@ -290,21 +258,22 @@ public class OfflineActivity extends AppCompatActivity
         }
 
         // Debug
-        Timber.d(String.format("%s/%s resources; %s bytes downloaded.",
+        Timber.d("%s/%s resources; %s bytes downloaded.",
           String.valueOf(status.getCompletedResourceCount()),
           String.valueOf(status.getRequiredResourceCount()),
-          String.valueOf(status.getCompletedResourceSize())));
+          String.valueOf(status.getCompletedResourceSize()));
       }
 
       @Override
       public void onError(OfflineRegionError error) {
-        Timber.e("onError reason: " + error.getReason());
-        Timber.e("onError message: " + error.getMessage());
+        Timber.e("onError: %s, %s", error.getReason(), error.getMessage());
+        offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
       }
 
       @Override
       public void mapboxTileCountLimitExceeded(long limit) {
-        Timber.e("Mapbox tile count limit exceeded: " + limit);
+        Timber.e("Mapbox tile count limit exceeded: %s", limit);
+        offlineRegion.setDownloadState(OfflineRegion.STATE_INACTIVE);
       }
     });
 

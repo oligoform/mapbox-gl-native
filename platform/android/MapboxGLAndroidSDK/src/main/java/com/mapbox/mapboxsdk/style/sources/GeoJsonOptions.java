@@ -3,11 +3,23 @@ package com.mapbox.mapboxsdk.style.sources;
 import java.util.HashMap;
 
 /**
- * Options for the {@link GeoJsonSource}
+ * Builder class for composing GeoJsonSource objects.
  *
+ * @see GeoJsonSource
  * @see <a href="https://www.mapbox.com/mapbox-gl-style-spec/#sources-geojson">The online documentation</a>
  */
 public class GeoJsonOptions extends HashMap<String, Object> {
+
+  /**
+   * Maximum zoom level at which to create vector tiles (higher means greater detail at high zoom levels).
+   *
+   * @param minZoom the maximum zoom - Defaults to 18.
+   * @return the current instance for chaining
+   */
+  public GeoJsonOptions withMinZoom(int minZoom) {
+    this.put("minzoom", minZoom);
+    return this;
+  }
 
   /**
    * Maximum zoom level at which to create vector tiles (higher means greater detail at high zoom levels).

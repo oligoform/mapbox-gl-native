@@ -1,34 +1,38 @@
 #pragma once
 
-#include <mbgl/map/view.hpp>
-#include <mbgl/gl/framebuffer.hpp>
-#include <mbgl/gl/texture.hpp>
-#include <mbgl/util/optional.hpp>
 #include <mbgl/util/image.hpp>
 
 namespace mbgl {
 
 namespace gl {
 class Context;
+class Texture;
 } // namespace gl
 
-class OffscreenTexture : public View {
+class OffscreenTexture {
 public:
-    OffscreenTexture(gl::Context&, Size size = { 256, 256 });
+    OffscreenTexture(gl::Context&,
+                     Size size = { 256, 256 },
+                     gl::TextureType type = gl::TextureType::UnsignedByte);
+    OffscreenTexture(gl::Context&,
+                     Size size,
+                     gl::Renderbuffer<gl::RenderbufferType::DepthComponent>&,
+                     gl::TextureType type = gl::TextureType::UnsignedByte);
+    ~OffscreenTexture();
+    OffscreenTexture(OffscreenTexture&&);
+    OffscreenTexture& operator=(OffscreenTexture&&);
 
-    void bind() override;
+    void bind();
 
     PremultipliedImage readStillImage();
 
     gl::Texture& getTexture();
 
-public:
-    const Size size;
+    const Size& getSize() const;
 
 private:
-    gl::Context& context;
-    optional<gl::Framebuffer> framebuffer;
-    optional<gl::Texture> texture;
+    class Impl;
+    std::unique_ptr<Impl> impl;
 };
 
 } // namespace mbgl

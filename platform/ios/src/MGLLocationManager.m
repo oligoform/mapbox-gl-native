@@ -1,9 +1,9 @@
 #import "MGLLocationManager.h"
+#import "MGLTelemetryConfig.h"
 #import <UIKit/UIKit.h>
 
 static const NSTimeInterval MGLLocationManagerHibernationTimeout = 300.0;
 static const NSTimeInterval MGLLocationManagerHibernationPollInterval = 5.0;
-static const CLLocationDistance MGLLocationManagerHibernationRadius = 300.0;
 static const CLLocationDistance MGLLocationManagerDistanceFilter = 5.0;
 static NSString * const MGLLocationManagerRegionIdentifier = @"MGLLocationManagerRegionIdentifier.fence.center";
 
@@ -32,7 +32,7 @@ static NSString * const MGLLocationManagerRegionIdentifier = @"MGLLocationManage
     if ([self isUpdatingLocation]) {
         return;
     }
-    
+
     [self configurePassiveStandardLocationManager];
     [self startLocationServices];
 }
@@ -44,6 +44,13 @@ static NSString * const MGLLocationManagerRegionIdentifier = @"MGLLocationManage
         self.updatingLocation = NO;
         if ([self.delegate respondsToSelector:@selector(locationManagerDidStopLocationUpdates:)]) {
             [self.delegate locationManagerDidStopLocationUpdates:self];
+        }
+    }
+    if(self.standardLocationManager.monitoredRegions.count > 0) {
+        for(CLRegion *region in self.standardLocationManager.monitoredRegions) {
+            if([region.identifier isEqualToString:MGLLocationManagerRegionIdentifier]) {
+                [self.standardLocationManager stopMonitoringForRegion:region];
+            }
         }
     }
 }
@@ -78,7 +85,7 @@ static NSString * const MGLLocationManagerRegionIdentifier = @"MGLLocationManage
                 self.standardLocationManager.allowsBackgroundLocationUpdates = YES;
             }
         }
-        
+
         [self.standardLocationManager startUpdatingLocation];
         self.updatingLocation = YES;
         if ([self.delegate respondsToSelector:@selector(locationManagerDidStartLocationUpdates:)]) {
@@ -91,13 +98,13 @@ static NSString * const MGLLocationManagerRegionIdentifier = @"MGLLocationManage
     if (self.backgroundLocationServiceTimeoutAllowedDate == nil) {
         return;
     }
-  
+
     if ([UIApplication sharedApplication].applicationState == UIApplicationStateActive ||
         [UIApplication sharedApplication].applicationState == UIApplicationStateInactive ) {
         [self startBackgroundTimeoutTimer];
         return;
     }
-    
+
     NSTimeInterval timeIntervalSinceTimeoutAllowed = [[NSDate date] timeIntervalSinceDate:self.backgroundLocationServiceTimeoutAllowedDate];
     if (timeIntervalSinceTimeoutAllowed > 0) {
         [self.standardLocationManager stopUpdatingLocation];
@@ -115,7 +122,7 @@ static NSString * const MGLLocationManagerRegionIdentifier = @"MGLLocationManage
 }
 
 - (void)establishRegionMonitoringForLocation:(CLLocation *)location {
-    CLCircularRegion *region = [[CLCircularRegion alloc] initWithCenter:location.coordinate radius:MGLLocationManagerHibernationRadius identifier:MGLLocationManagerRegionIdentifier];
+    CLCircularRegion *region = [[CLCircularRegion alloc] initWithCenter:location.coordinate radius:MGLTelemetryConfig.sharedConfig.MGLLocationManagerHibernationRadius identifier:MGLLocationManagerRegionIdentifier];
     region.notifyOnEntry = NO;
     region.notifyOnExit = YES;
     [self.standardLocationManager startMonitoringForRegion:region];
@@ -144,7 +151,7 @@ static NSString * const MGLLocationManagerRegionIdentifier = @"MGLLocationManage
     if (location.speed > 0.0) {
         [self startBackgroundTimeoutTimer];
     }
-    if (self.standardLocationManager.monitoredRegions.count == 0 || location.horizontalAccuracy < MGLLocationManagerHibernationRadius) {
+    if (self.standardLocationManager.monitoredRegions.count == 0 || location.horizontalAccuracy < MGLTelemetryConfig.sharedConfig.MGLLocationManagerHibernationRadius) {
         [self establishRegionMonitoringForLocation:location];
     }
     if ([self.delegate respondsToSelector:@selector(locationManager:didUpdateLocations:)]) {

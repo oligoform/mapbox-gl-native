@@ -1,6 +1,9 @@
 #import "MGLMapView.h"
 
-#include <mbgl/map/map.hpp>
+namespace mbgl {
+    class Map;
+    class Renderer;
+}
 
 @interface MGLMapView (Private)
 
@@ -26,5 +29,7 @@
 - (void)renderSync;
 
 - (mbgl::Map *)mbglMap;
+
+- (mbgl::Renderer *)renderer;
 
 @end

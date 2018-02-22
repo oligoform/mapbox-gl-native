@@ -1,10 +1,13 @@
 package com.mapbox.mapboxsdk.testapp.activity.fragment;
 
-import android.support.v7.app.AppCompatActivity;
 import android.os.Bundle;
+import android.support.v7.app.AppCompatActivity;
 
 import com.mapbox.mapboxsdk.testapp.R;
 
+/**
+ * Test Activity showcasing using multiple static map fragments in one layout.
+ */
 public class MultiMapActivity extends AppCompatActivity {
 
   @Override

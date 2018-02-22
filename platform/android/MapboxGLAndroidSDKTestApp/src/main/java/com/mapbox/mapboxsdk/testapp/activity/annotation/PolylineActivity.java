@@ -2,26 +2,29 @@ package com.mapbox.mapboxsdk.testapp.activity.annotation;
 
 import android.graphics.Color;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
 import android.view.Menu;
 import android.view.MenuItem;
 import android.view.View;
+import android.widget.Toast;
 
 import com.mapbox.mapboxsdk.annotations.Polyline;
 import com.mapbox.mapboxsdk.annotations.PolylineOptions;
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.testapp.R;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
+/**
+ * Test activity showcasing the Polyline annotations API.
+ * <p>
+ * Shows how to add and remove polylines.
+ * </p>
+ */
 public class PolylineActivity extends AppCompatActivity {
 
   private static final String STATE_POLYLINE_OPTIONS = "polylineOptions";
@@ -52,15 +55,6 @@ public class PolylineActivity extends AppCompatActivity {
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_polyline);
 
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
-    }
-
     if (savedInstanceState != null) {
       polylineOptions = savedInstanceState.getParcelableArrayList(STATE_POLYLINE_OPTIONS);
     } else {
@@ -69,34 +63,35 @@ public class PolylineActivity extends AppCompatActivity {
 
     mapView = (MapView) findViewById(R.id.mapView);
     mapView.onCreate(savedInstanceState);
-    mapView.getMapAsync(new OnMapReadyCallback() {
-      @Override
-      public void onMapReady(@NonNull MapboxMap mapboxMap) {
-        PolylineActivity.this.mapboxMap = mapboxMap;
-        polylines = mapboxMap.addPolylines(polylineOptions);
-      }
+    mapView.getMapAsync(mapboxMap -> {
+      PolylineActivity.this.mapboxMap = mapboxMap;
+
+      mapboxMap.setOnPolylineClickListener(polyline -> Toast.makeText(
+        PolylineActivity.this,
+        "You clicked on polygon with id = " + polyline.getId(),
+        Toast.LENGTH_SHORT
+      ).show());
+
+      polylines = mapboxMap.addPolylines(polylineOptions);
     });
 
     View fab = findViewById(R.id.fab);
     if (fab != null) {
-      fab.setOnClickListener(new View.OnClickListener() {
-        @Override
-        public void onClick(View view) {
-          if (mapboxMap != null) {
-            if (polylines != null && polylines.size() > 0) {
-              if (polylines.size() == 1) {
-                // test for removing annotation
-                mapboxMap.removeAnnotation(polylines.get(0));
-              } else {
-                // test for removing annotations
-                mapboxMap.removeAnnotations(polylines);
-              }
+      fab.setOnClickListener(view -> {
+        if (mapboxMap != null) {
+          if (polylines != null && polylines.size() > 0) {
+            if (polylines.size() == 1) {
+              // test for removing annotation
+              mapboxMap.removeAnnotation(polylines.get(0));
+            } else {
+              // test for removing annotations
+              mapboxMap.removeAnnotations(polylines);
             }
-            polylineOptions.clear();
-            polylineOptions.addAll(getRandomLine());
-            polylines = mapboxMap.addPolylines(polylineOptions);
-
           }
+          polylineOptions.clear();
+          polylineOptions.addAll(getRandomLine());
+          polylines = mapboxMap.addPolylines(polylineOptions);
+
         }
       });
     }
@@ -182,11 +177,16 @@ public class PolylineActivity extends AppCompatActivity {
 
   @Override
   public boolean onOptionsItemSelected(MenuItem item) {
+    if (polylines.size() <= 0) {
+      Toast.makeText(PolylineActivity.this, "No polylines on map", Toast.LENGTH_LONG).show();
+      return super.onOptionsItemSelected(item);
+    }
     switch (item.getItemId()) {
       case R.id.action_id_remove:
         // test to remove all annotations
         polylineOptions.clear();
         mapboxMap.clear();
+        polylines.clear();
         return true;
 
       case R.id.action_id_alpha:
@@ -216,11 +216,6 @@ public class PolylineActivity extends AppCompatActivity {
           p.setAlpha(visible ? (fullAlpha ? FULL_ALPHA : PARTIAL_ALPHA) : NO_ALPHA);
         }
         return true;
-
-      case android.R.id.home:
-        onBackPressed();
-        return true;
-
       default:
         return super.onOptionsItemSelected(item);
     }

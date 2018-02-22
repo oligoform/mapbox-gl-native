@@ -2,19 +2,17 @@ package com.mapbox.mapboxsdk.testapp.activity.imagegenerator;
 
 import android.graphics.Bitmap;
 import android.os.Bundle;
-import android.support.annotation.NonNull;
 import android.support.v4.print.PrintHelper;
-import android.support.v7.app.ActionBar;
 import android.support.v7.app.AppCompatActivity;
-import android.support.v7.widget.Toolbar;
-import android.view.MenuItem;
 import android.view.View;
 
 import com.mapbox.mapboxsdk.maps.MapView;
 import com.mapbox.mapboxsdk.maps.MapboxMap;
-import com.mapbox.mapboxsdk.maps.OnMapReadyCallback;
 import com.mapbox.mapboxsdk.testapp.R;
 
+/**
+ * Test activity showcasing using the Snaphot API to print a Map.
+ */
 public class PrintActivity extends AppCompatActivity implements MapboxMap.SnapshotReadyCallback {
 
   private MapView mapView;
@@ -25,32 +23,15 @@ public class PrintActivity extends AppCompatActivity implements MapboxMap.Snapsh
     super.onCreate(savedInstanceState);
     setContentView(R.layout.activity_print);
 
-    Toolbar toolbar = (Toolbar) findViewById(R.id.toolbar);
-    setSupportActionBar(toolbar);
-
-    final ActionBar actionBar = getSupportActionBar();
-    if (actionBar != null) {
-      actionBar.setDisplayHomeAsUpEnabled(true);
-      actionBar.setDisplayShowHomeEnabled(true);
-    }
-
     mapView = (MapView) findViewById(R.id.mapView);
     mapView.onCreate(savedInstanceState);
-    mapView.getMapAsync(new OnMapReadyCallback() {
-      @Override
-      public void onMapReady(@NonNull MapboxMap mapboxMap) {
-        PrintActivity.this.mapboxMap = mapboxMap;
-      }
-    });
+    mapView.getMapAsync(mapboxMap -> PrintActivity.this.mapboxMap = mapboxMap);
 
     final View fab = findViewById(R.id.fab);
     if (fab != null) {
-      fab.setOnClickListener(new View.OnClickListener() {
-        @Override
-        public void onClick(View view) {
-          if (mapboxMap != null) {
-            mapboxMap.snapshot(PrintActivity.this);
-          }
+      fab.setOnClickListener(view -> {
+        if (mapboxMap != null) {
+          mapboxMap.snapshot(PrintActivity.this);
         }
       });
     }
@@ -104,16 +85,4 @@ public class PrintActivity extends AppCompatActivity implements MapboxMap.Snapsh
     super.onLowMemory();
     mapView.onLowMemory();
   }
-
-  @Override
-  public boolean onOptionsItemSelected(MenuItem item) {
-    switch (item.getItemId()) {
-      case android.R.id.home:
-        onBackPressed();
-        return true;
-      default:
-        return super.onOptionsItemSelected(item);
-    }
-  }
-
 }
