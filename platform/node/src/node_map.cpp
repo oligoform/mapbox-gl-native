@@ -464,6 +464,8 @@ void NodeMap::renderFinished() {
     assert(!callback);
     assert(!image.data);
 
+    Nan::AsyncResource resource("mbgl:NodeMap.renderFinished");
+
     if (error) {
         std::string errorMessage;
 
@@ -481,7 +483,7 @@ void NodeMap::renderFinished() {
         error = nullptr;
         assert(!error);
 
-        cb->Call(1, argv);
+        cb->Call(1, argv, &resource);
     } else if (img.data) {
         v8::Local<v8::Object> pixels = Nan::NewBuffer(
             reinterpret_cast<char *>(img.data.get()), img.bytes(),
@@ -497,12 +499,12 @@ void NodeMap::renderFinished() {
             Nan::Null(),
             pixels
         };
-        cb->Call(2, argv);
+        cb->Call(2, argv, &resource);
     } else {
         v8::Local<v8::Value> argv[] = {
             Nan::Error("Didn't get an image")
         };
-        cb->Call(1, argv);
+        cb->Call(1, argv, &resource);
     }
 }
 
